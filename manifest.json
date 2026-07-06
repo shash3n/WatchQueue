@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "WatchQueue",
+  "version": "0.3.3",
+  "description": "A modern YouTube-themed queue manager with watch progress, drag-and-drop ordering, auto-next playback, in-place search, shuffle, four-edge dockable widget, custom accent, playlist/show import, and a full settings panel.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "src/storage.js",
+        "src/queueManager.js",
+        "src/contentScript.js"
+      ],
+      "css": [
+        "src/styles.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "Show or hide WatchQueue"
+  }
+}
