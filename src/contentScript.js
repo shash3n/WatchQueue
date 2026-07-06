@@ -1257,6 +1257,59 @@
     if (noMatch) noMatch.hidden = !(term && rows.length && visibleCount === 0);
   }
 
+  function toolbarIcon(name, enabled = false) {
+    const common = 'class="watchqueue-svg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"';
+    const slash = '<line x1="3" y1="21" x2="21" y2="3" class="watchqueue-icon-slash" />';
+
+    if (name === "reverse") {
+      // Clean vertical swap arrows — up on left, down on right
+      return `<svg ${common}>
+        <path d="M7 18V6" />
+        <path d="M3.5 10L7 6l3.5 4" />
+        <path d="M17 6v12" />
+        <path d="M13.5 14l3.5 4 3.5-4" />
+      </svg>`;
+    }
+
+    if (name === "loop") {
+      // Standard repeat/loop icon — two curved arrows forming a cycle
+      return `<svg ${common}>
+        <path d="M17 2l3 3.5-3 3.5" />
+        <path d="M3.5 11.5a8 8 0 018-8h8.5" />
+        <path d="M7 22l-3-3.5 3-3.5" />
+        <path d="M20.5 12.5a8 8 0 01-8 8H4" />
+        ${enabled ? "" : slash}
+      </svg>`;
+    }
+
+    if (name === "autoRemove") {
+      // Clean trash-can with a checkmark (on) or X (off) badge
+      return `<svg ${common}>
+        <path d="M8.5 6V5a1.5 1.5 0 011.5-1.5h4A1.5 1.5 0 0115.5 5v1" />
+        <path d="M5 6h14" />
+        <path d="M6.5 6l.8 12.5a1.5 1.5 0 001.5 1.5h6.4a1.5 1.5 0 001.5-1.5l.3-5" />
+        <path d="M10.2 10v7" />
+        <path d="M13.8 10v4" />
+        ${enabled
+          ? '<path d="M16 15l2 2 4-4.5" class="watchqueue-icon-mark" />'
+          : '<path d="M16.5 14.5l4 4M20.5 14.5l-4 4" class="watchqueue-icon-mark" />'}
+      </svg>`;
+    }
+
+    if (name === "shuffle") {
+      // Standard shuffle — two crossing paths with arrowheads
+      return `<svg ${common}>
+        <path d="M3 17h2.5a4 4 0 003.2-1.6l4.6-6.3A4 4 0 0116.5 7.5H18" />
+        <path d="M18 4.5l3 3-3 3" />
+        <path d="M3 7.5h2.5a4 4 0 013.2 1.6l4.6 6.3a4 4 0 003.2 1.6H18" />
+        <path d="M18 14l3 3-3 3" />
+        ${enabled ? "" : slash}
+      </svg>`;
+    }
+
+    return "";
+  }
+
   async function renderPanel() {
     const state = await WatchQueueStorage.getState();
     WQ.settings = { ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}), ...(state.settings || {}) };
@@ -1364,16 +1417,10 @@
         </div>
         <div class="watchqueue-search-row ${state.queue.length ? "" : "watchqueue-hidden"}">
           <div class="watchqueue-search"><span class="watchqueue-search-icon">⌕</span><input type="text" placeholder="Search queue" value="${escapeHtml(WQ.queueSearch)}" data-action="search" /></div>
-          <button type="button" class="watchqueue-tool-button watchqueue-tool-icon" data-action="reverse" title="Reverse queue order" ${state.queue.length < 2 ? "disabled" : ""}>⇅</button>
-          <div class="watchqueue-sort-wrap">
-            <button type="button" class="watchqueue-tool-button" data-action="sort-toggle" title="Sort queue" ${state.queue.length < 2 ? "disabled" : ""}>↕ Sort</button>
-            <div class="watchqueue-sort-menu" data-sort-menu hidden>
-              <button type="button" data-sort="title">Name (A–Z)</button>
-              <button type="button" data-sort="date">Upload date</button>
-              <button type="button" data-sort="time">Duration</button>
-            </div>
-          </div>
-          <button type="button" class="watchqueue-shuffle" data-action="shuffle" title="Shuffle queue" ${state.queue.length < 2 ? "disabled" : ""}>⤭</button>
+          <button type="button" class="watchqueue-tool-button watchqueue-tool-icon" data-action="reverse" title="Reverse queue order" ${state.queue.length < 2 ? "disabled" : ""}>${toolbarIcon("reverse")}</button>
+          <button type="button" class="watchqueue-tool-button watchqueue-tool-icon watchqueue-sync-icon ${state.settings?.loopQueue ? "is-active" : ""}" data-action="queue-loop-toggle" title="${state.settings?.loopQueue ? "Loop queue is on" : "Loop queue is off"}" aria-label="${state.settings?.loopQueue ? "Turn queue loop off" : "Turn queue loop on"}" aria-pressed="${state.settings?.loopQueue ? "true" : "false"}">${toolbarIcon("loop", Boolean(state.settings?.loopQueue))}</button>
+          <button type="button" class="watchqueue-tool-button watchqueue-tool-icon watchqueue-sync-icon ${state.settings?.autoRemoveWatched ? "is-active" : ""}" data-action="queue-auto-remove-toggle" title="${state.settings?.autoRemoveWatched ? "Auto-remove watched is on" : "Auto-remove watched is off"}" aria-label="${state.settings?.autoRemoveWatched ? "Turn auto-remove watched off" : "Turn auto-remove watched on"}" aria-pressed="${state.settings?.autoRemoveWatched ? "true" : "false"}">${toolbarIcon("autoRemove", Boolean(state.settings?.autoRemoveWatched))}</button>
+          <button type="button" class="watchqueue-tool-button watchqueue-tool-icon watchqueue-sync-icon ${state.settings?.shuffleQueue ? "is-active" : ""}" data-action="shuffle" title="${state.settings?.shuffleQueue ? "Shuffle is on" : "Shuffle is off"}" aria-label="${state.settings?.shuffleQueue ? "Turn shuffle off and restore previous order" : "Turn shuffle on"}" aria-pressed="${state.settings?.shuffleQueue ? "true" : "false"}" ${state.queue.length < 2 ? "disabled" : ""}>${toolbarIcon("shuffle", Boolean(state.settings?.shuffleQueue))}</button>
         </div>
         <ul class="watchqueue-list">${queueRows ? queueRows + noMatchMarkup : emptyQueueMarkup}</ul>
         <div class="watchqueue-actions"><button type="button" data-action="play-first" ${!state.queue.length ? "disabled" : ""}>Play first</button><button type="button" data-action="save-queue" ${!state.queue.length ? "disabled" : ""}>Save as playlist</button><button type="button" data-action="clear" ${!state.queue.length ? "disabled" : ""}>Clear</button></div>
@@ -1395,27 +1442,28 @@
     WQ.panel.querySelector("[data-action='play-first']")?.addEventListener("click", () => state.queue[0] && navigateToVideo(state.queue[0]));
     WQ.panel.querySelector("[data-action='play-prev']")?.addEventListener("click", () => previousQueueItem && navigateToVideo(previousQueueItem));
     WQ.panel.querySelector("[data-action='play-next']")?.addEventListener("click", () => nextQueueItem && navigateToVideo(nextQueueItem));
-    WQ.panel.querySelector("[data-action='shuffle']")?.addEventListener("click", async () => { await WatchQueueManager.shuffleQueue(); await renderWidget(); await renderPanel(); showToast("Queue shuffled"); });
+    WQ.panel.querySelector("[data-action='shuffle']")?.addEventListener("click", async () => {
+      const enabled = !state.settings?.shuffleQueue;
+      await WatchQueueManager.toggleShuffleQueue();
+      await renderWidget();
+      await renderPanel();
+      showToast(enabled ? "Shuffle enabled" : "Shuffle disabled — original order restored");
+    });
     WQ.panel.querySelector("[data-action='reverse']")?.addEventListener("click", async () => { await WatchQueueManager.reverseQueue(); await renderWidget(); await renderPanel(); showToast("Queue reversed"); });
-    const sortToggle = WQ.panel.querySelector("[data-action='sort-toggle']");
-    const sortMenu = WQ.panel.querySelector("[data-sort-menu]");
-    if (sortToggle && sortMenu) {
-      sortToggle.addEventListener("click", (event) => { event.stopPropagation(); sortMenu.hidden = !sortMenu.hidden; });
-      sortMenu.querySelectorAll("[data-sort]").forEach((button) => {
-        button.addEventListener("click", async () => {
-          sortMenu.hidden = true;
-          await WatchQueueManager.sortQueue(button.dataset.sort);
-          await renderWidget();
-          await renderPanel();
-          const labels = { title: "name", date: "upload date", time: "duration" };
-          showToast(`Sorted by ${labels[button.dataset.sort] || "name"}`);
-        });
-      });
-      // close the menu when clicking elsewhere in the panel
-      WQ.panel.addEventListener("click", (event) => {
-        if (!sortMenu.hidden && !event.target.closest(".watchqueue-sort-wrap")) sortMenu.hidden = true;
-      });
-    }
+    WQ.panel.querySelector("[data-action='queue-loop-toggle']")?.addEventListener("click", async () => {
+      const enabled = !state.settings?.loopQueue;
+      await WatchQueueManager.updateSettings({ loopQueue: enabled });
+      await loadSettings();
+      await renderPanel();
+      showToast(enabled ? "Queue loop enabled" : "Queue loop disabled");
+    });
+    WQ.panel.querySelector("[data-action='queue-auto-remove-toggle']")?.addEventListener("click", async () => {
+      const enabled = !state.settings?.autoRemoveWatched;
+      await WatchQueueManager.updateSettings({ autoRemoveWatched: enabled });
+      await loadSettings();
+      await renderPanel();
+      showToast(enabled ? "Auto-remove enabled" : "Auto-remove disabled");
+    });
 
     const searchInput = WQ.panel.querySelector("[data-action='search']");
     if (searchInput) {

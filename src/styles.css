@@ -587,7 +587,7 @@
   cursor: not-allowed;
 }
 
-/* Queue tool buttons (reverse / sort) beside the search + shuffle */
+/* Queue tool buttons and quick settings beside the search + shuffle */
 .watchqueue-tool-button {
   flex: 0 0 auto;
   height: 34px;
@@ -622,48 +622,35 @@
   padding: 0;
   justify-content: center;
   font-size: 15px;
+  line-height: 1;
 }
 
-.watchqueue-sort-wrap {
-  position: relative;
-  flex: 0 0 auto;
-}
-.watchqueue-sort-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 5;
-  min-width: 150px;
-  padding: 6px;
-  background: var(--wq-bg-elevated);
-  border: 1px solid var(--wq-border);
-  border-radius: 12px;
-  box-shadow: var(--wq-shadow);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.watchqueue-tool-icon svg,
+.watchqueue-svg-icon {
+  width: 17px;
+  height: 17px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.watchqueue-sort-menu[hidden] { display: none; }
-
-.watchqueue-sort-menu button {
-  border: 0;
-  background: transparent;
-  color: var(--wq-text);
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 120ms ease;
+.watchqueue-icon-slash,
+.watchqueue-icon-mark {
+  stroke-width: 2;
 }
 
-.watchqueue-sort-menu button:hover {
-  background: var(--wq-hover);
+.watchqueue-sync-icon {
+  color: var(--wq-muted);
+}
+
+.watchqueue-sync-icon.is-active {
+  border-color: var(--wq-red, #ff0033);
   color: var(--wq-red, #ff0033);
 }
+
 
 /* ==========================================================================
    Lists + rows

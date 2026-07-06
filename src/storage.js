@@ -10,6 +10,7 @@ const WATCHQUEUE_DEFAULT_SETTINGS = {
   nearEndSeconds: 10,         // "near the end" window
   autoRemoveWatched: false,   // drop finished videos from the queue automatically
   loopQueue: false,           // wrap back to the top when the queue ends
+  shuffleQueue: false,        // keep the queue in shuffled mode until toggled off
   showThumbnailButtons: true, // show the "+ Queue" hover button on thumbnails
   confirmClear: true,         // ask before clearing the whole queue
   widgetEdge: "right",        // "left" | "right" | "top" | "bottom" — which screen edge the widget docks to
@@ -25,6 +26,7 @@ const WATCHQUEUE_DEFAULT_STATE = {
   widgetPosition: null,
   widgetHidden: false,
   playlists: [],
+  shuffleOriginalOrder: null,
   settings: { ...WATCHQUEUE_DEFAULT_SETTINGS }
 };
 

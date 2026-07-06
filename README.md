@@ -15,16 +15,16 @@ WatchQueue adds a lightweight floating widget directly to YouTube, making it eas
 * Drag-and-drop queue reordering.
 * Previous and Next queue navigation.
 * Search the queue with live filtering.
-* Shuffle the queue.
+* Toggle Shuffle from the queue panel. Turning Shuffle on randomizes the current queue; turning it off restores the order that existed before shuffle was enabled.
 * Reverse queue order.
-* Sort by:
-
-  * Name (A–Z)
-  * Upload date
-  * Duration
 * Display total queue duration.
-* Optional automatic removal of watched videos.
-* Optional queue looping.
+* Toggle queue looping directly from the queue panel with icon controls.
+* Reverse, Loop, Auto-remove, and Shuffle use matching minimalist line-art icons.
+* Loop uses separate off/on icons: a continuous oval loop when enabled and the same icon with a diagonal strikethrough when disabled.
+* Toggle automatic removal of watched videos directly from the queue panel with a matching line-style icon control.
+* Auto-remove uses a trash-can icon when enabled and a trash-can icon with a small x when disabled.
+* Shuffle uses a crossed-arrow icon when enabled and the same icon with a diagonal strikethrough when disabled.
+* Queue-panel Loop and Auto-remove icon controls stay synchronized with Settings.
 
 ---
 
@@ -207,6 +207,26 @@ Everything updates live without requiring a page refresh.
 ---
 
 # Changelog
+
+## v0.3.5
+
+### Changed
+
+* Updated Reverse, Loop, Auto-remove watched, and Shuffle icons to use a consistent minimalist line-art style based on the requested icon descriptions.
+* Added true Shuffle on/off behavior: enabling Shuffle randomizes the queue and saving the previous order; disabling Shuffle restores that previous order.
+* Added separate Shuffle on/off icons with a diagonal strikethrough for the disabled state.
+* README updated for the new icon and shuffle behavior.
+
+## v0.3.4
+
+### Changed
+
+* Removed queue sorting from the queue toolbar.
+* Added Loop and Auto-remove watched icon controls directly to the queue panel.
+* Loop now uses distinct matching line-style off/on icons in the queue toolbar.
+* Auto-remove watched now uses matching line-style off/on icons instead of emoji.
+* Queue-panel icon controls now update the same Settings values, keeping both locations synchronized.
+* README updated to reflect the queue toolbar changes.
 
 ## v0.3.3
 

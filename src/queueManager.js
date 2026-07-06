@@ -38,23 +38,27 @@ window.WatchQueueManager = {
 
       const progress = currentState.progress?.[video.videoId] || {};
 
+      const nextItem = {
+        videoId: video.videoId,
+        title: cleanedTitle || "Untitled video",
+        channelName: video.channelName || "YouTube",
+        thumbnailUrl: video.thumbnailUrl || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+        durationText: video.durationText || "",
+        publishedText: video.publishedText || "",
+        lastWatchedSeconds: progress.lastWatchedSeconds || 0,
+        durationSeconds: progress.durationSeconds || 0,
+        completed: progress.completed || false,
+        addedAt: Date.now()
+      };
+
+      const shuffleOriginalOrder = currentState.settings?.shuffleQueue
+        ? [...(currentState.shuffleOriginalOrder || currentState.queue.map((item) => item.videoId)), nextItem.videoId]
+        : currentState.shuffleOriginalOrder;
+
       return {
         ...currentState,
-        queue: [
-          ...currentState.queue,
-          {
-            videoId: video.videoId,
-            title: cleanedTitle || "Untitled video",
-            channelName: video.channelName || "YouTube",
-            thumbnailUrl: video.thumbnailUrl || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
-            durationText: video.durationText || "",
-            publishedText: video.publishedText || "",
-            lastWatchedSeconds: progress.lastWatchedSeconds || 0,
-            durationSeconds: progress.durationSeconds || 0,
-            completed: progress.completed || false,
-            addedAt: Date.now()
-          }
-        ]
+        queue: [...currentState.queue, nextItem],
+        shuffleOriginalOrder
       };
     });
 
@@ -75,22 +79,67 @@ window.WatchQueueManager = {
   async removeVideo(videoId) {
     return WatchQueueStorage.updateState((state) => ({
       ...state,
-      queue: state.queue.filter((item) => item.videoId !== videoId)
+      queue: state.queue.filter((item) => item.videoId !== videoId),
+      shuffleOriginalOrder: Array.isArray(state.shuffleOriginalOrder)
+        ? state.shuffleOriginalOrder.filter((id) => id !== videoId)
+        : state.shuffleOriginalOrder
     }));
   },
 
   async clearQueue() {
-    return WatchQueueStorage.updateState((state) => ({ ...state, queue: [] }));
+    return WatchQueueStorage.updateState((state) => ({
+      ...state,
+      queue: [],
+      shuffleOriginalOrder: null,
+      settings: {
+        ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}),
+        ...(state.settings || {}),
+        shuffleQueue: false
+      }
+    }));
   },
 
-  async shuffleQueue() {
+  async toggleShuffleQueue() {
     return WatchQueueStorage.updateState((state) => {
+      const shuffleEnabled = Boolean(state.settings?.shuffleQueue);
+
+      if (shuffleEnabled) {
+        const originalOrder = Array.isArray(state.shuffleOriginalOrder) ? state.shuffleOriginalOrder : [];
+        const queueById = new Map(state.queue.map((item) => [item.videoId, item]));
+        const restoredQueue = [
+          ...originalOrder.map((videoId) => queueById.get(videoId)).filter(Boolean),
+          ...state.queue.filter((item) => !originalOrder.includes(item.videoId))
+        ];
+
+        return {
+          ...state,
+          queue: restoredQueue,
+          shuffleOriginalOrder: null,
+          settings: {
+            ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}),
+            ...(state.settings || {}),
+            shuffleQueue: false
+          }
+        };
+      }
+
+      const originalOrder = state.queue.map((item) => item.videoId);
       const queue = [...state.queue];
       for (let i = queue.length - 1; i > 0; i -= 1) {
         const j = Math.floor(Math.random() * (i + 1));
         [queue[i], queue[j]] = [queue[j], queue[i]];
       }
-      return { ...state, queue };
+
+      return {
+        ...state,
+        queue,
+        shuffleOriginalOrder: originalOrder,
+        settings: {
+          ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}),
+          ...(state.settings || {}),
+          shuffleQueue: true
+        }
+      };
     });
   },
 
@@ -99,38 +148,6 @@ window.WatchQueueManager = {
       ...state,
       queue: [...state.queue].reverse()
     }));
-  },
-
-  async sortQueue(by = "title") {
-    const parseDuration = (item) => {
-      if (Number(item.durationSeconds) > 0) return Number(item.durationSeconds);
-      const text = String(item.durationText || "").trim();
-      if (!text) return 0;
-      const parts = text.split(":").map((n) => Number(n));
-      if (parts.some((n) => Number.isNaN(n))) return 0;
-      return parts.reduce((acc, n) => acc * 60 + n, 0);
-    };
-    const parseUpload = (item) => {
-      const text = String(item.publishedText || "").toLowerCase();
-      const match = text.match(/(\d+)\s*(second|minute|hour|day|week|month|year)/);
-      if (!match) return 0;
-      const amount = Number(match[1]);
-      const unitMs = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, week: 6048e5, month: 2592e6, year: 31536e6 }[match[2]] || 0;
-      return Date.now() - amount * unitMs; // approximate upload timestamp
-    };
-    return WatchQueueStorage.updateState((state) => {
-      const queue = [...state.queue];
-      if (by === "title") {
-        queue.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), undefined, { sensitivity: "base", numeric: true }));
-      } else if (by === "date") {
-        // newest upload first; unknown dates sink to the bottom
-        queue.sort((a, b) => (parseUpload(b) || 0) - (parseUpload(a) || 0));
-      } else if (by === "time") {
-        // longest duration first; unknown durations sink to the bottom
-        queue.sort((a, b) => (parseDuration(b) || 0) - (parseDuration(a) || 0));
-      }
-      return { ...state, queue };
-    });
   },
 
   async removeCompletedFromQueue() {
