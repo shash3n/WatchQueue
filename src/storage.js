@@ -15,7 +15,9 @@ const WATCHQUEUE_DEFAULT_SETTINGS = {
   confirmClear: true,         // ask before clearing the whole queue
   widgetEdge: "right",        // "left" | "right" | "top" | "bottom" — which screen edge the widget docks to
   widgetStyle: "pill",        // "pill" | "tab" — floating widget shape
-  panelOpacity: 100           // 55..100 — panel background opacity (percent)
+  panelOpacity: 100,          // 55..100 — panel background opacity (percent)
+  progressRetentionDays: 90,  // prune saved timestamps older than this for videos not in any queue/playlist
+  sleepCloseTab: false        // close tab when sleep timer ends (instead of just pausing)
 };
 
 const WATCHQUEUE_DEFAULT_STATE = {
@@ -27,6 +29,8 @@ const WATCHQUEUE_DEFAULT_STATE = {
   widgetHidden: false,
   playlists: [],
   shuffleOriginalOrder: null,
+  savedQueues: [],
+  activeQueueId: null,
   settings: { ...WATCHQUEUE_DEFAULT_SETTINGS }
 };
 

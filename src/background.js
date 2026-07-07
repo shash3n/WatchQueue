@@ -267,6 +267,11 @@ chrome.action.onClicked.addListener(async (tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "WATCHQUEUE_CLOSE_TAB") {
+    if (sender?.tab?.id) chrome.tabs.remove(sender.tab.id);
+    sendResponse({ ok: true });
+    return true;
+  }
   if (message?.type !== "WATCHQUEUE_IMPORT_PLAYLIST") return false;
   importPlaylist(message.url, message.fallbackTitle)
     .then((result) => sendResponse({ ok: true, ...result }))

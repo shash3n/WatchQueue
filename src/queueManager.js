@@ -386,5 +386,106 @@ window.WatchQueueManager = {
     const playlist = (state.playlists || []).find((item) => item.id === playlistId);
     if (!playlist) return { addedCount: 0, duplicateCount: 0 };
     return this.addVideos(playlist.videos || []);
+  },
+
+  // ---------- Multi-queue ----------
+
+  async createNewQueue(name) {
+    const id = `wq_q_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    return WatchQueueStorage.updateState((state) => {
+      const savedQueues = [...(state.savedQueues || [])];
+      // save current queue into its slot first
+      if (state.activeQueueId) {
+        const idx = savedQueues.findIndex((q) => q.id === state.activeQueueId);
+        if (idx !== -1) savedQueues[idx] = { ...savedQueues[idx], queue: state.queue, shuffleOriginalOrder: state.shuffleOriginalOrder, updatedAt: Date.now() };
+      } else if (state.queue.length) {
+        // save current anonymous queue as "Default"
+        savedQueues.unshift({ id: `wq_q_default_${Date.now()}`, name: "Default", queue: state.queue, shuffleOriginalOrder: state.shuffleOriginalOrder, createdAt: Date.now(), updatedAt: Date.now() });
+      }
+      savedQueues.push({ id, name: name || "New queue", queue: [], shuffleOriginalOrder: null, createdAt: Date.now(), updatedAt: Date.now() });
+      return { ...state, savedQueues, activeQueueId: id, queue: [], shuffleOriginalOrder: null, settings: { ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}), ...(state.settings || {}), shuffleQueue: false } };
+    });
+  },
+
+  async switchQueue(queueId) {
+    return WatchQueueStorage.updateState((state) => {
+      const savedQueues = [...(state.savedQueues || [])];
+      // save outgoing queue
+      if (state.activeQueueId) {
+        const idx = savedQueues.findIndex((q) => q.id === state.activeQueueId);
+        if (idx !== -1) savedQueues[idx] = { ...savedQueues[idx], queue: state.queue, shuffleOriginalOrder: state.shuffleOriginalOrder, updatedAt: Date.now() };
+      }
+      // load incoming queue
+      const target = savedQueues.find((q) => q.id === queueId);
+      if (!target) return { ...state, savedQueues };
+      return { ...state, savedQueues, activeQueueId: queueId, queue: target.queue || [], shuffleOriginalOrder: target.shuffleOriginalOrder || null, settings: { ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}), ...(state.settings || {}), shuffleQueue: false } };
+    });
+  },
+
+  async deleteQueue(queueId) {
+    return WatchQueueStorage.updateState((state) => {
+      const savedQueues = (state.savedQueues || []).filter((q) => q.id !== queueId);
+      // if deleting the active queue, switch to the first remaining or create empty
+      if (state.activeQueueId === queueId) {
+        const fallback = savedQueues[0];
+        return { ...state, savedQueues, activeQueueId: fallback ? fallback.id : null, queue: fallback ? (fallback.queue || []) : [], shuffleOriginalOrder: fallback ? (fallback.shuffleOriginalOrder || null) : null, settings: { ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}), ...(state.settings || {}), shuffleQueue: false } };
+      }
+      return { ...state, savedQueues };
+    });
+  },
+
+  async renameQueue(queueId, name) {
+    const cleanedName = watchQueueCleanText(name);
+    if (!queueId || !cleanedName) return WatchQueueStorage.getState();
+    return WatchQueueStorage.updateState((state) => ({
+      ...state,
+      savedQueues: (state.savedQueues || []).map((q) => q.id === queueId ? { ...q, name: cleanedName, updatedAt: Date.now() } : q)
+    }));
+  },
+
+  // ---------- Reset progress ----------
+
+  async resetVideoProgress(videoId) {
+    if (!videoId) return;
+    return WatchQueueStorage.updateState((state) => {
+      const updatedProgress = { ...state.progress };
+      delete updatedProgress[videoId];
+      return {
+        ...state,
+        progress: updatedProgress,
+        queue: state.queue.map((item) => item.videoId === videoId ? { ...item, lastWatchedSeconds: 0, durationSeconds: item.durationSeconds, completed: false } : item),
+        playlists: (state.playlists || []).map((playlist) => ({
+          ...playlist,
+          videos: (playlist.videos || []).map((item) => item.videoId === videoId ? { ...item, lastWatchedSeconds: 0, completed: false } : item)
+        }))
+      };
+    });
+  },
+
+  // ---------- Storage management ----------
+
+  async pruneProgress() {
+    return WatchQueueStorage.updateState((state) => {
+      const retentionDays = (state.settings?.progressRetentionDays) || 90;
+      const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+      const queueIds = new Set(state.queue.map((item) => item.videoId));
+      const playlistIds = new Set((state.playlists || []).flatMap((pl) => (pl.videos || []).map((v) => v.videoId)));
+      const savedQueueIds = new Set((state.savedQueues || []).flatMap((sq) => (sq.queue || []).map((v) => v.videoId)));
+      const prunedProgress = {};
+      for (const [videoId, entry] of Object.entries(state.progress || {})) {
+        if (queueIds.has(videoId) || playlistIds.has(videoId) || savedQueueIds.has(videoId)) { prunedProgress[videoId] = entry; continue; }
+        if ((entry.updatedAt || 0) >= cutoff) { prunedProgress[videoId] = entry; continue; }
+      }
+      return { ...state, progress: prunedProgress };
+    });
+  },
+
+  async getProgressCount() {
+    const state = await WatchQueueStorage.getState();
+    return Object.keys(state.progress || {}).length;
+  },
+
+  async clearAllProgress() {
+    return WatchQueueStorage.updateState((state) => ({ ...state, progress: {} }));
   }
 };

@@ -16,9 +16,14 @@
     autoNextHandledForVideoId: null,
     autoNextTimer: null,
     activeTab: "queue",
+    sleepTimerEnd: null,
+    sleepTimerInterval: null,
+    sleepPopoverOpen: false,
     selectedPlaylistId: null,
     metadataRepairInFlight: false,
     queueSearch: "",
+    playlistSearch: "",
+    playlistVideoSearch: "",
     settings: { ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}) }
   };
 
@@ -715,6 +720,8 @@
       if (!video) continue;
       const card = findCard(anchor);
       if (!card) continue;
+      // Skip if this card already has a "+ List" button (it's a playlist card, not a single video)
+      if (card.querySelector(".watchqueue-list-add-button")) continue;
       refreshQueuedVideoMetadata(video);
       if (card.querySelector(`.watchqueue-add-button[data-video-id="${video.videoId}"]`)) continue;
       const thumbnail = getButtonHost(card, anchor, false);
@@ -1048,6 +1055,24 @@
         </div>
 
         <div class="watchqueue-settings-group">
+          <h4>Sleep timer</h4>
+          <span class="watchqueue-setting-desc">Set a sleep timer from the clock icon beside Queue Mode. When the timer ends the video pauses automatically.</span>
+          ${toggleControl("sleepCloseTab", "Close tab when timer ends", Boolean(s.sleepCloseTab), "Close the browser tab instead of just pausing.")}
+        </div>
+
+        <div class="watchqueue-settings-group">
+          <h4>Storage</h4>
+          ${sliderControl("progressRetentionDays", "Keep timestamps for", 7, 365, num(s.progressRetentionDays, 90), " days")}
+          <div class="watchqueue-setting watchqueue-setting-info">
+            <span class="watchqueue-setting-desc">Saved timestamps: <strong data-progress-count>…</strong> videos tracked</span>
+          </div>
+          <div class="watchqueue-settings-buttons">
+            <button type="button" data-action="prune-progress">Prune old timestamps</button>
+            <button type="button" data-action="clear-progress" class="watchqueue-danger-outline">Clear all timestamps</button>
+          </div>
+        </div>
+
+        <div class="watchqueue-settings-group">
           <h4>Backup &amp; data</h4>
           <div class="watchqueue-settings-buttons">
             <button type="button" data-action="export-data">Export backup</button>
@@ -1236,6 +1261,27 @@
       await renderPanel();
       showToast("Settings reset to defaults");
     });
+    // storage management
+    WatchQueueManager.getProgressCount().then((count) => {
+      const el = WQ.panel?.querySelector("[data-progress-count]");
+      if (el) el.textContent = String(count);
+    });
+    WQ.panel.querySelector("[data-action='prune-progress']")?.addEventListener("click", async () => {
+      const beforeCount = await WatchQueueManager.getProgressCount();
+      await WatchQueueManager.pruneProgress();
+      const afterCount = await WatchQueueManager.getProgressCount();
+      const el = WQ.panel?.querySelector("[data-progress-count]");
+      if (el) el.textContent = String(afterCount);
+      showToast(`Pruned ${beforeCount - afterCount} old entries`);
+    });
+    WQ.panel.querySelector("[data-action='clear-progress']")?.addEventListener("click", async () => {
+      const ok = await showConfirmDialog({ title: "Clear all timestamps", message: "Remove all saved video timestamps? Queue and playlists are kept but progress will show 'Not started'.", confirmText: "Clear", danger: true });
+      if (!ok) return;
+      await WatchQueueManager.clearAllProgress();
+      const el = WQ.panel?.querySelector("[data-progress-count]");
+      if (el) el.textContent = "0";
+      showToast("All timestamps cleared");
+    });
   }
 
   function applyQueueFilter() {
@@ -1251,6 +1297,40 @@
       row.hidden = !match;
       // disable drag while filtering so indices can't desync
       row.setAttribute("draggable", term ? "false" : "true");
+      if (match) visibleCount += 1;
+    });
+    const noMatch = list.querySelector(".watchqueue-no-match");
+    if (noMatch) noMatch.hidden = !(term && rows.length && visibleCount === 0);
+  }
+
+  function applyPlaylistFilter() {
+    if (!WQ.panel) return;
+    const list = WQ.panel.querySelector(".watchqueue-playlist-list");
+    if (!list) return;
+    const term = (WQ.playlistSearch || "").trim().toLowerCase();
+    const rows = Array.from(list.querySelectorAll(".watchqueue-playlist-row"));
+    let visibleCount = 0;
+    rows.forEach((row) => {
+      const key = row.dataset.search || "";
+      const match = !term || key.includes(term);
+      row.hidden = !match;
+      if (match) visibleCount += 1;
+    });
+    const noMatch = list.querySelector(".watchqueue-no-match");
+    if (noMatch) noMatch.hidden = !(term && rows.length && visibleCount === 0);
+  }
+
+  function applyPlaylistVideoFilter() {
+    if (!WQ.panel) return;
+    const list = WQ.panel.querySelector(".watchqueue-playlist-video-list");
+    if (!list) return;
+    const term = (WQ.playlistVideoSearch || "").trim().toLowerCase();
+    const rows = Array.from(list.querySelectorAll(".watchqueue-playlist-video-row"));
+    let visibleCount = 0;
+    rows.forEach((row) => {
+      const key = row.dataset.search || "";
+      const match = !term || key.includes(term);
+      row.hidden = !match;
       if (match) visibleCount += 1;
     });
     const noMatch = list.querySelector(".watchqueue-no-match");
@@ -1307,7 +1387,154 @@
       </svg>`;
     }
 
+    if (name === "reset") {
+      // Counter-clockwise circular arrow (undo/reset)
+      return `<svg ${common}>
+        <path d="M4 12a8 8 0 018-8 8 8 0 017.4 5" />
+        <path d="M7.5 3L4 6.5 7.5 10" />
+        <path d="M20 12a8 8 0 01-8 8 8 8 0 01-7.4-5" />
+      </svg>`;
+    }
+
+    if (name === "sleep") {
+      // Alarm clock with bells
+      return `<svg ${common}>
+        <circle cx="12" cy="13" r="8" />
+        <path d="M12 9v4l2.5 1.5" />
+        <path d="M5.5 5L3 3" />
+        <path d="M18.5 5L21 3" />
+        <path d="M12 5V3" />
+      </svg>`;
+    }
+
+    if (name === "queueAdd") {
+      // List with a plus — add to queue
+      return `<svg ${common}>
+        <path d="M4 6h10" />
+        <path d="M4 11h7" />
+        <path d="M4 16h5" />
+        <path d="M17 13v6" />
+        <path d="M14 16h6" />
+      </svg>`;
+    }
+
+    if (name === "edit") {
+      // Pencil
+      return `<svg ${common}>
+        <path d="M17.5 3.5l3 3L8 19l-4 1 1-4L17.5 3.5z" />
+        <path d="M14.5 6.5l3 3" />
+      </svg>`;
+    }
+
+    if (name === "back") {
+      // Left arrow
+      return `<svg ${common}>
+        <path d="M19 12H5" />
+        <path d="M11 18l-6-6 6-6" />
+      </svg>`;
+    }
+
     return "";
+  }
+
+  // ---------- sleep timer ----------
+  function startSleepTimer(minutes) {
+    clearSleepTimer(false);
+    WQ.sleepTimerEnd = Date.now() + minutes * 60 * 1000;
+    saveSleepTimerToStorage();
+    WQ.sleepTimerInterval = setInterval(sleepTimerTick, 1000);
+    WQ.sleepPopoverOpen = false;
+    const popover = WQ.panel?.querySelector(".watchqueue-sleep-popover");
+    if (popover) popover.classList.add("watchqueue-hidden");
+    updateSleepDisplay();
+    showToast(`Sleep timer: ${minutes} minute${minutes === 1 ? "" : "s"}`);
+  }
+
+  function clearSleepTimer(notify = true) {
+    if (WQ.sleepTimerInterval) { clearInterval(WQ.sleepTimerInterval); WQ.sleepTimerInterval = null; }
+    WQ.sleepTimerEnd = null;
+    saveSleepTimerToStorage();
+    updateSleepDisplay();
+    if (notify) {
+      WQ.sleepPopoverOpen = false;
+      if (WQ.panel && !WQ.panel.hidden) renderPanel();
+    }
+  }
+
+  function sleepTimerTick() {
+    if (!WQ.sleepTimerEnd) return;
+    const remaining = WQ.sleepTimerEnd - Date.now();
+    if (remaining <= 0) {
+      clearSleepTimer(false);
+      executeSleepAction();
+      return;
+    }
+    updateSleepDisplay();
+  }
+
+  function executeSleepAction() {
+    // Use YouTube's own player API to pause — this properly sets the player
+    // state so autoplay, queue-next, and ad-resume all respect the pause.
+    const video = document.querySelector("video");
+    if (video && !video.paused) video.pause();
+    const player = document.querySelector("#movie_player");
+    if (player && typeof player.pauseVideo === "function") {
+      player.pauseVideo();
+    } else {
+      const btn = document.querySelector(".ytp-play-button");
+      if (btn) btn.click();
+    }
+
+    if (settings().sleepCloseTab) {
+      showToast("Sleep timer ended — closing tab…");
+      setTimeout(() => {
+        try { chrome.runtime?.sendMessage({ type: "WATCHQUEUE_CLOSE_TAB" }); } catch {}
+        setTimeout(() => { try { window.close(); } catch {} }, 500);
+      }, 1200);
+    } else {
+      showToast("Sleep timer ended — video paused");
+    }
+  }
+
+  function getSleepRemainingText() {
+    if (!WQ.sleepTimerEnd) return null;
+    const remaining = Math.max(0, WQ.sleepTimerEnd - Date.now());
+    const totalSeconds = Math.ceil(remaining / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function updateSleepDisplay() {
+    if (!WQ.panel) return;
+    const btn = WQ.panel.querySelector("[data-action='sleep-toggle']");
+    if (!btn) return;
+    const label = btn.querySelector(".watchqueue-sleep-label");
+    const isActive = Boolean(WQ.sleepTimerEnd);
+    btn.classList.toggle("is-active", isActive);
+    const timeText = isActive ? getSleepRemainingText() || "" : "";
+    if (label) label.textContent = timeText;
+    const stopBtn = WQ.panel.querySelector("[data-action='sleep-cancel']");
+    if (stopBtn && isActive) stopBtn.textContent = `Stop timer · ${timeText}`;
+  }
+
+  function saveSleepTimerToStorage() {
+    try { chrome.storage?.local?.set({ watchQueueSleepTimerEnd: WQ.sleepTimerEnd || 0 }); } catch {}
+  }
+
+  async function restoreSleepTimer() {
+    try {
+      const data = await chrome.storage?.local?.get(["watchQueueSleepTimerEnd"]);
+      const end = data?.watchQueueSleepTimerEnd;
+      if (end && end > Date.now()) {
+        WQ.sleepTimerEnd = end;
+        WQ.sleepTimerInterval = setInterval(sleepTimerTick, 1000);
+      } else if (end) {
+        chrome.storage?.local?.remove("watchQueueSleepTimerEnd");
+      }
+    } catch {}
   }
 
   async function renderPanel() {
@@ -1328,11 +1555,12 @@
       const displayTitle = isBadVideoTitle(item.title) ? `Video ${index + 1} · ${item.videoId}` : item.title;
       const channel = item.channelName || "YouTube";
       const searchKey = `${displayTitle} ${channel}`.toLowerCase();
+      const hasProgress = item.lastWatchedSeconds > 0 || item.completed;
       return `<li class="watchqueue-row ${item.videoId === currentVideoId ? "watchqueue-row-current" : ""} ${item.completed ? "watchqueue-row-done" : ""}" draggable="true" data-index="${index}" data-video-id="${item.videoId}" data-search="${escapeHtml(searchKey)}">
           <span class="watchqueue-drag" title="Drag to reorder">⋮⋮</span>
-          <div class="watchqueue-thumb-wrap"><img class="watchqueue-thumb" src="${escapeHtml(item.thumbnailUrl)}" alt="" loading="lazy" />${item.durationText ? `<span class="watchqueue-thumb-time">${escapeHtml(item.durationText)}</span>` : ""}<span class="watchqueue-progress-bar"><span style="width:${percentage}%"></span></span></div>
+          <div class="watchqueue-thumb-wrap"><img class="watchqueue-thumb" src="${escapeHtml(item.thumbnailUrl)}" alt="" loading="lazy" />${item.durationText ? `<span class="watchqueue-thumb-time">${escapeHtml(item.durationText)}</span>` : ""}<span class="watchqueue-progress-bar"><span style="width:${percentage}%"></span></span>${item.completed ? `<span class="watchqueue-done-badge" title="Watched">✓</span>` : ""}</div>
           <div class="watchqueue-row-main"><button class="watchqueue-title" type="button" data-action="resume" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</button><div class="watchqueue-meta"><span class="watchqueue-meta-channel">${escapeHtml(channel)}</span><span class="watchqueue-meta-progress">${progress}${item.completed ? " · Done" : ""}</span>${item.publishedText ? `<span class="watchqueue-meta-date">${escapeHtml(item.publishedText)}</span>` : ""}</div></div>
-          <button class="watchqueue-icon-button" type="button" title="Remove" data-action="remove">×</button>
+          <div class="watchqueue-row-actions">${hasProgress ? `<button class="watchqueue-icon-button watchqueue-reset-button" type="button" title="Reset timestamp" data-action="reset-progress">${toolbarIcon("reset")}</button>` : ""}<button class="watchqueue-icon-button" type="button" title="Remove" data-action="remove">×</button></div>
         </li>`;
     }).join("");
 
@@ -1354,19 +1582,23 @@
       return `<span class="watchqueue-plstack" data-count="${videos.length}" aria-hidden="true">${layers}</span>`;
     };
 
-    const playlistRows = playlists.map((playlist) => `<li class="watchqueue-playlist-row" data-playlist-id="${playlist.id}">
+    const playlistRows = playlists.map((playlist) => {
+      const plSearchKey = playlist.name.toLowerCase();
+      return `<li class="watchqueue-playlist-row" data-playlist-id="${playlist.id}" data-search="${escapeHtml(plSearchKey)}">
       <button class="watchqueue-playlist-open" type="button" data-action="playlist-open" title="${escapeHtml(playlist.name)}">
         ${playlistThumbStack(playlist)}
         <span class="watchqueue-playlist-open-text"><strong>${escapeHtml(playlist.name)}</strong><span>${playlist.videos?.length || 0} videos</span></span>
       </button>
-      <button type="button" data-action="playlist-add">Queue</button>
-      <button type="button" data-action="playlist-delete">×</button>
-    </li>`).join("");
+      <button type="button" class="watchqueue-icon-button" data-action="playlist-add" title="Add to queue">${toolbarIcon("queueAdd")}</button>
+      <button type="button" class="watchqueue-icon-button" data-action="playlist-delete" title="Delete playlist">×</button>
+    </li>`;
+    }).join("");
 
     const selectedPlaylistRows = selectedPlaylist ? (selectedPlaylist.videos || []).map((item, index) => {
       const progressEntry = state.progress?.[item.videoId] || item || {};
       const watched = Number(progressEntry.lastWatchedSeconds || 0);
       const duration = Number(progressEntry.durationSeconds || 0);
+      const completed = Boolean(progressEntry.completed);
       const progressText = duration > 0
         ? `${formatTime(watched)} / ${formatTime(duration)}`
         : watched > 0
@@ -1375,29 +1607,40 @@
       const displayTitle = isBadVideoTitle(item.title) ? `Video ${index + 1} · ${item.videoId}` : item.title;
       const channel = item.channelName || "YouTube";
       const isQueued = state.queue.some((queueItem) => queueItem.videoId === item.videoId);
-      return `<li class="watchqueue-row watchqueue-playlist-video-row" data-video-id="${item.videoId}">
+      const hasProgress = watched > 0 || completed;
+      const searchKey = `${displayTitle} ${channel}`.toLowerCase();
+      return `<li class="watchqueue-row watchqueue-playlist-video-row ${completed ? "watchqueue-row-done" : ""}" data-video-id="${item.videoId}" data-search="${escapeHtml(searchKey)}">
         <span class="watchqueue-row-number">${index + 1}</span>
-        <div class="watchqueue-thumb-wrap"><img class="watchqueue-thumb" src="${escapeHtml(item.thumbnailUrl)}" alt="" loading="lazy" /></div>
-        <div class="watchqueue-row-main"><button class="watchqueue-title" type="button" data-action="playlist-video-play" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</button><div class="watchqueue-meta"><span class="watchqueue-meta-channel">${escapeHtml(channel)}</span><span class="watchqueue-meta-progress">${escapeHtml(progressText)}${progressEntry.completed ? " · Done" : ""}</span>${item.publishedText ? `<span class="watchqueue-meta-date">${escapeHtml(item.publishedText)}</span>` : ""}</div></div>
-        <button class="watchqueue-playlist-queue-button watchqueue-plus-button ${isQueued ? "is-queued" : ""}" type="button" title="${isQueued ? "Already in queue" : "Add video to queue"}" data-action="playlist-video-queue" ${isQueued ? "disabled" : ""}>${isQueued ? "✓" : "+"}</button>
+        <div class="watchqueue-thumb-wrap"><img class="watchqueue-thumb" src="${escapeHtml(item.thumbnailUrl)}" alt="" loading="lazy" />${completed ? `<span class="watchqueue-done-badge" title="Watched">✓</span>` : ""}</div>
+        <div class="watchqueue-row-main"><button class="watchqueue-title" type="button" data-action="playlist-video-play" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</button><div class="watchqueue-meta"><span class="watchqueue-meta-channel">${escapeHtml(channel)}</span><span class="watchqueue-meta-progress">${escapeHtml(progressText)}${completed ? " · Done" : ""}</span>${item.publishedText ? `<span class="watchqueue-meta-date">${escapeHtml(item.publishedText)}</span>` : ""}</div></div>
+        <div class="watchqueue-row-actions">${hasProgress ? `<button class="watchqueue-icon-button watchqueue-reset-button" type="button" title="Reset timestamp" data-action="playlist-video-reset">${toolbarIcon("reset")}</button>` : ""}<button class="watchqueue-playlist-queue-button watchqueue-plus-button ${isQueued ? "is-queued" : ""}" type="button" title="${isQueued ? "Already in queue" : "Add video to queue"}" data-action="playlist-video-queue" ${isQueued ? "disabled" : ""}>${isQueued ? "✓" : "+"}</button></div>
       </li>`;
     }).join("") : "";
 
     const playlistPage = selectedPlaylist ? `
       <div class="watchqueue-playlist-detail">
-        <div class="watchqueue-detail-header"><button type="button" data-action="playlist-back">← Back</button><div><strong title="${escapeHtml(selectedPlaylist.name)}">${escapeHtml(selectedPlaylist.name)}</strong><span>${selectedPlaylist.videos?.length || 0} videos</span></div><button type="button" data-action="playlist-rename">Rename</button></div>
+        <div class="watchqueue-detail-header"><button type="button" class="watchqueue-detail-icon-btn" data-action="playlist-back" title="Back">${toolbarIcon("back")}</button><div><strong title="${escapeHtml(selectedPlaylist.name)}">${escapeHtml(selectedPlaylist.name)}</strong><span>${selectedPlaylist.videos?.length || 0} videos</span></div><button type="button" class="watchqueue-detail-icon-btn" data-action="playlist-rename" title="Rename">${toolbarIcon("edit")}</button></div>
         <div class="watchqueue-actions watchqueue-detail-actions"><button type="button" data-action="playlist-play-first" ${(selectedPlaylist.videos || []).length ? "" : "disabled"}>Play first</button><button type="button" data-action="playlist-add-all" ${(selectedPlaylist.videos || []).length ? "" : "disabled"}>Add all to queue</button><button type="button" data-action="playlist-delete-selected">Delete</button></div>
-        <ul class="watchqueue-list watchqueue-playlist-video-list">${selectedPlaylistRows || `<li class="watchqueue-empty"><strong>No videos found.</strong><span>Try importing the playlist from its YouTube playlist page.</span></li>`}</ul>
+        ${(selectedPlaylist.videos || []).length > 3 ? `<div class="watchqueue-search-row"><div class="watchqueue-search"><span class="watchqueue-search-icon">⌕</span><input type="text" placeholder="Search in playlist" value="${escapeHtml(WQ.playlistVideoSearch)}" data-action="playlist-video-search" /></div></div>` : ""}
+        <ul class="watchqueue-list watchqueue-playlist-video-list">${selectedPlaylistRows ? selectedPlaylistRows + `<li class="watchqueue-empty watchqueue-no-match" hidden><strong>No matches.</strong><span>Nothing in this playlist matches your search.</span></li>` : `<li class="watchqueue-empty"><strong>No videos found.</strong><span>Try importing the playlist from its YouTube playlist page.</span></li>`}</ul>
       </div>` : `
       <div class="watchqueue-scroll watchqueue-playlist-scroll">
         <div class="watchqueue-playlist-tools"><button type="button" data-action="import-current-playlist" ${!canImportCurrentYouTubePage(window.location.href) ? "disabled" : ""}>Import current YouTube playlist/show</button></div>
-        <ul class="watchqueue-playlist-list">${playlistRows || `<li class="watchqueue-empty"><strong>No custom playlists yet.</strong><span>Save your queue or import a YouTube playlist.</span></li>`}</ul>
+        ${playlists.length > 3 ? `<div class="watchqueue-search-row"><div class="watchqueue-search"><span class="watchqueue-search-icon">⌕</span><input type="text" placeholder="Search playlists" value="${escapeHtml(WQ.playlistSearch)}" data-action="playlist-search" /></div></div>` : ""}
+        <ul class="watchqueue-playlist-list">${playlistRows ? playlistRows + `<li class="watchqueue-empty watchqueue-no-match" hidden><strong>No matches.</strong><span>No playlists match your search.</span></li>` : `<li class="watchqueue-empty"><strong>No custom playlists yet.</strong><span>Save your queue or import a YouTube playlist.</span></li>`}</ul>
       </div>`;
 
     const totalDuration = totalQueueDurationText(state.queue);
     const subtitle = state.queue.length
       ? `${state.queue.length} video${state.queue.length === 1 ? "" : "s"}${totalDuration ? ` · ${totalDuration}` : ""}`
       : "No videos yet";
+
+    // Preserve scroll positions across re-render
+    const scrollPositions = {};
+    for (const sel of [".watchqueue-list", ".watchqueue-playlist-scroll", ".watchqueue-playlist-detail", ".watchqueue-settings-scroll"]) {
+      const el = WQ.panel.querySelector(sel);
+      if (el && el.scrollTop > 0) scrollPositions[sel] = el.scrollTop;
+    }
 
     WQ.panel.innerHTML = `
       <div class="watchqueue-panel-header">
@@ -1411,8 +1654,33 @@
       </div>
 
       <div class="watchqueue-tab-page ${WQ.activeTab !== "queue" ? "watchqueue-hidden" : ""}">
+        ${(state.savedQueues || []).length > 0 ? `<div class="watchqueue-queue-selector">
+          <div class="watchqueue-queue-radios">
+            ${(state.savedQueues || []).map((sq) => `<label class="watchqueue-queue-radio ${sq.id === state.activeQueueId ? "is-active" : ""}" title="${escapeHtml(sq.name)}"><input type="radio" name="wq-active-queue" value="${sq.id}" ${sq.id === state.activeQueueId ? "checked" : ""} /><span>${escapeHtml(sq.name)}</span><span class="watchqueue-queue-count">${(sq.id === state.activeQueueId ? state.queue : sq.queue || []).length}</span></label>`).join("")}
+          </div>
+          <div class="watchqueue-queue-selector-actions"><button type="button" data-action="new-queue" title="Create a new queue">+</button><button type="button" data-action="rename-queue" title="Rename active queue" ${!state.activeQueueId ? "disabled" : ""}>✎</button><button type="button" data-action="delete-queue" title="Delete active queue" ${!state.activeQueueId || (state.savedQueues || []).length < 2 ? "disabled" : ""}>×</button></div>
+        </div>` : `<div class="watchqueue-queue-selector watchqueue-queue-selector-minimal"><button type="button" class="watchqueue-queue-new-btn" data-action="new-queue" title="Create additional named queues">+ New queue</button></div>`}
         <div class="watchqueue-control-row">
           <label class="watchqueue-switch"><input type="checkbox" ${state.queueMode ? "checked" : ""} data-action="queue-mode" /><span class="watchqueue-slider"></span><span class="watchqueue-switch-label">Queue Mode</span></label>
+          <div class="watchqueue-sleep-wrap">
+            <button type="button" class="watchqueue-tool-button watchqueue-tool-icon watchqueue-sleep-btn ${WQ.sleepTimerEnd ? "is-active" : ""}" data-action="sleep-toggle" title="${WQ.sleepTimerEnd ? "Sleep timer active" : "Set sleep timer"}">${toolbarIcon("sleep")}<span class="watchqueue-sleep-label">${WQ.sleepTimerEnd ? (getSleepRemainingText() || "") : ""}</span></button>
+            <div class="watchqueue-sleep-popover ${WQ.sleepPopoverOpen ? "" : "watchqueue-hidden"}">
+              <div class="watchqueue-sleep-grid">
+                ${[15, 30, 45, 60, 90, 120].map((m) => `<button type="button" data-sleep-minutes="${m}">${m >= 60 ? `${m / 60}h` : `${m}m`}</button>`).join("")}
+              </div>
+              <div class="watchqueue-sleep-custom-row">
+                <span class="watchqueue-sleep-custom-label">Custom</span>
+                <select data-sleep-hours title="Hours">${Array.from({length: 13}, (_, i) => `<option value="${i}">${i}h</option>`).join("")}</select>
+                <select data-sleep-mins title="Minutes">${[0,1,2,5,10,15,20,25,30,35,40,45,50,55].map((m) => `<option value="${m}">${m}m</option>`).join("")}</select>
+                <button type="button" data-action="sleep-custom-start">Start</button>
+              </div>
+              <div class="watchqueue-sleep-option">
+                <span>Close tab when timer ends</span>
+                <label class="watchqueue-switch watchqueue-switch-compact"><input type="checkbox" ${settings().sleepCloseTab ? "checked" : ""} data-action="sleep-close-tab" /><span class="watchqueue-slider"></span></label>
+              </div>
+              ${WQ.sleepTimerEnd ? `<button type="button" class="watchqueue-sleep-stop" data-action="sleep-cancel">Stop timer · ${getSleepRemainingText() || "0:00"}</button>` : ""}
+            </div>
+          </div>
           <div class="watchqueue-mini-nav" title="Move through your queue"><button type="button" data-action="play-prev" ${!previousQueueItem || state.queue.length < 2 ? "disabled" : ""}>Prev</button><span>${currentQueueText}</span><button type="button" data-action="play-next" ${!nextQueueItem || state.queue.length < 2 ? "disabled" : ""}>Next</button></div>
         </div>
         <div class="watchqueue-search-row ${state.queue.length ? "" : "watchqueue-hidden"}">
@@ -1431,14 +1699,51 @@
       <div class="watchqueue-tab-page ${WQ.activeTab !== "settings" ? "watchqueue-hidden" : ""}">${WQ.activeTab === "settings" ? buildSettingsPage(state) : ""}</div>`;
 
     WQ.panel.querySelector(".watchqueue-close")?.addEventListener("click", () => { WQ.userOpenedPanel = false; WQ.panel.hidden = true; });
-    WQ.panel.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", async () => { WQ.activeTab = button.dataset.tab; if (WQ.activeTab !== "playlists") WQ.selectedPlaylistId = null; await renderPanel(); }));
+    WQ.panel.addEventListener("click", (event) => {
+      if (WQ.sleepPopoverOpen && !event.target.closest(".watchqueue-sleep-wrap")) {
+        WQ.sleepPopoverOpen = false;
+        const popover = WQ.panel.querySelector(".watchqueue-sleep-popover");
+        if (popover) popover.classList.add("watchqueue-hidden");
+      }
+    });
+    WQ.panel.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", async () => { WQ.activeTab = button.dataset.tab; WQ.sleepPopoverOpen = false; if (WQ.activeTab !== "playlists") { WQ.selectedPlaylistId = null; WQ.playlistSearch = ""; WQ.playlistVideoSearch = ""; } await renderPanel(); }));
 
     if (WQ.activeTab === "settings") {
       bindSettingsHandlers(state);
+      for (const [sel, top] of Object.entries(scrollPositions)) {
+        const el = WQ.panel.querySelector(sel);
+        if (el) el.scrollTop = top;
+      }
       return;
     }
 
     WQ.panel.querySelector("[data-action='queue-mode']")?.addEventListener("change", async () => { await WatchQueueManager.toggleQueueMode(); await renderPanel(); });
+
+    // Sleep timer handlers
+    WQ.panel.querySelector("[data-action='sleep-toggle']")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      WQ.sleepPopoverOpen = !WQ.sleepPopoverOpen;
+      const popover = WQ.panel.querySelector(".watchqueue-sleep-popover");
+      if (popover) popover.classList.toggle("watchqueue-hidden", !WQ.sleepPopoverOpen);
+    });
+    WQ.panel.querySelectorAll("[data-sleep-minutes]").forEach((btn) => {
+      btn.addEventListener("click", () => startSleepTimer(Number(btn.dataset.sleepMinutes)));
+    });
+    WQ.panel.querySelector("[data-action='sleep-custom-start']")?.addEventListener("click", () => {
+      const hours = Number(WQ.panel.querySelector("[data-sleep-hours]")?.value || 0);
+      const mins = Number(WQ.panel.querySelector("[data-sleep-mins]")?.value || 0);
+      const total = hours * 60 + mins;
+      if (total > 0) startSleepTimer(total);
+      else showToast("Pick a time first");
+    });
+    WQ.panel.querySelector("[data-action='sleep-close-tab']")?.addEventListener("change", async (event) => {
+      await WatchQueueManager.updateSettings({ sleepCloseTab: event.target.checked });
+      await loadSettings();
+    });
+    WQ.panel.querySelector("[data-action='sleep-cancel']")?.addEventListener("click", () => {
+      clearSleepTimer();
+      showToast("Sleep timer cancelled");
+    });
     WQ.panel.querySelector("[data-action='play-first']")?.addEventListener("click", () => state.queue[0] && navigateToVideo(state.queue[0]));
     WQ.panel.querySelector("[data-action='play-prev']")?.addEventListener("click", () => previousQueueItem && navigateToVideo(previousQueueItem));
     WQ.panel.querySelector("[data-action='play-next']")?.addEventListener("click", () => nextQueueItem && navigateToVideo(nextQueueItem));
@@ -1508,7 +1813,7 @@
       }
     });
 
-    WQ.panel.querySelector("[data-action='playlist-back']")?.addEventListener("click", async () => { WQ.selectedPlaylistId = null; await renderPanel(); });
+    WQ.panel.querySelector("[data-action='playlist-back']")?.addEventListener("click", async () => { WQ.selectedPlaylistId = null; WQ.playlistVideoSearch = ""; await renderPanel(); });
     WQ.panel.querySelector("[data-action='playlist-rename']")?.addEventListener("click", async () => {
       if (!selectedPlaylist) return;
       const name = await showNameDialog({ title: "Rename playlist", label: "Playlist name", initialValue: selectedPlaylist.name, confirmText: "Rename" });
@@ -1555,6 +1860,7 @@
           await renderPanel();
           showToast(result?.wasDuplicate ? "Already in queue" : "Added to queue");
         }
+        if (action === "playlist-video-reset") { await WatchQueueManager.resetVideoProgress(videoId); await renderPanel(); showToast("Timestamp reset"); }
       });
     });
 
@@ -1565,6 +1871,7 @@
         const item = state.queue.find((queueItem) => queueItem.videoId === videoId);
         if (action === "resume" && item) await navigateToVideo(item);
         if (action === "remove") { await WatchQueueManager.removeVideo(videoId); await renderWidget(); await renderPanel(); }
+        if (action === "reset-progress") { await WatchQueueManager.resetVideoProgress(videoId); await renderPanel(); showToast("Timestamp reset"); }
       });
       row.addEventListener("dragstart", (event) => {
         if ((WQ.queueSearch || "").trim()) { event.preventDefault(); return; }
@@ -1581,6 +1888,66 @@
         if (Number.isInteger(fromIndex) && Number.isInteger(toIndex) && fromIndex !== toIndex) { await WatchQueueManager.reorderQueue(fromIndex, toIndex); await renderPanel(); }
       });
     });
+
+    // Multi-queue handlers
+    WQ.panel.querySelectorAll("input[name='wq-active-queue']").forEach((radio) => {
+      radio.addEventListener("change", async () => {
+        if (radio.value && radio.value !== state.activeQueueId) { await WatchQueueManager.switchQueue(radio.value); WQ.queueSearch = ""; await renderWidget(); await renderPanel(); showToast("Switched queue"); }
+      });
+    });
+    WQ.panel.querySelector("[data-action='new-queue']")?.addEventListener("click", async () => {
+      const name = await showNameDialog({ title: "New queue", label: "Queue name", initialValue: "My queue", confirmText: "Create" });
+      if (!name) return;
+      await WatchQueueManager.createNewQueue(name);
+      WQ.queueSearch = "";
+      await renderWidget();
+      await renderPanel();
+      showToast(`Created "${name}"`);
+    });
+    WQ.panel.querySelector("[data-action='rename-queue']")?.addEventListener("click", async () => {
+      if (!state.activeQueueId) return;
+      const current = (state.savedQueues || []).find((q) => q.id === state.activeQueueId);
+      const name = await showNameDialog({ title: "Rename queue", label: "Queue name", initialValue: current?.name || "", confirmText: "Rename" });
+      if (!name) return;
+      await WatchQueueManager.renameQueue(state.activeQueueId, name);
+      await renderPanel();
+    });
+    WQ.panel.querySelector("[data-action='delete-queue']")?.addEventListener("click", async () => {
+      if (!state.activeQueueId) return;
+      const current = (state.savedQueues || []).find((q) => q.id === state.activeQueueId);
+      const ok = await showConfirmDialog({ title: "Delete queue", message: `Delete "${current?.name || "this queue"}"? Videos won't be lost from playlists.`, confirmText: "Delete" });
+      if (!ok) return;
+      await WatchQueueManager.deleteQueue(state.activeQueueId);
+      WQ.queueSearch = "";
+      await renderWidget();
+      await renderPanel();
+    });
+
+    // Playlist list search handler
+    const playlistSearchInput = WQ.panel.querySelector("[data-action='playlist-search']");
+    if (playlistSearchInput) {
+      playlistSearchInput.addEventListener("input", () => {
+        WQ.playlistSearch = playlistSearchInput.value;
+        applyPlaylistFilter();
+      });
+      applyPlaylistFilter();
+    }
+
+    // Playlist video search handler
+    const playlistVideoSearchInput = WQ.panel.querySelector("[data-action='playlist-video-search']");
+    if (playlistVideoSearchInput) {
+      playlistVideoSearchInput.addEventListener("input", () => {
+        WQ.playlistVideoSearch = playlistVideoSearchInput.value;
+        applyPlaylistVideoFilter();
+      });
+      applyPlaylistVideoFilter();
+    }
+
+    // Restore scroll positions after re-render
+    for (const [sel, top] of Object.entries(scrollPositions)) {
+      const el = WQ.panel.querySelector(sel);
+      if (el) el.scrollTop = top;
+    }
   }
 
   function parseTimestampParam() {
@@ -1729,6 +2096,8 @@
 
   async function init() {
     await loadSettings();
+    await WatchQueueManager.pruneProgress();
+    await restoreSleepTimer();
     await renderWidget();
     await injectThumbnailButtons();
     attachPlayerWatcher();
@@ -1740,6 +2109,7 @@
     window.addEventListener("resize", async () => { const state = await WatchQueueStorage.getState(); positionWidget(state.widgetPosition || getDefaultWidgetPosition()); });
     window.addEventListener("watchqueue:state-changed", async () => {
       if (!WQ.panel || WQ.panel.hidden || WQ.activeTab === "settings") return;
+      if (WQ.sleepPopoverOpen) return;
       const active = WQ.panel.querySelector("[data-action='search']");
       if (active && document.activeElement === active) return; // don't yank focus mid-search
       await renderPanel();
