@@ -24,6 +24,7 @@
     queueSearch: "",
     playlistSearch: "",
     playlistVideoSearch: "",
+    historySearch: "",
     settings: { ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}) }
   };
 
@@ -329,6 +330,81 @@
         if (event.key === "Escape") { document.removeEventListener("keydown", onKey); cleanup(false); }
       });
     });
+  }
+
+  async function showQueuePickerDialog({ title = "Add to queue", confirmText = "Add" } = {}) {
+    const state = await WatchQueueStorage.getState();
+    const queues = state.savedQueues || [];
+    if (queues.length < 2) return state.activeQueueId || null;
+    return new Promise((resolve) => {
+      const existing = document.querySelector(".watchqueue-name-dialog");
+      if (existing) existing.remove();
+      const overlay = document.createElement("div");
+      overlay.className = `watchqueue-name-dialog ${getThemeClass()}`;
+      applyAccent(overlay);
+      const radioRows = queues.map((sq) => {
+        const count = sq.id === state.activeQueueId ? state.queue.length : (sq.queue || []).length;
+        const isActive = sq.id === state.activeQueueId;
+        return `<label class="watchqueue-queue-picker-option ${isActive ? "is-active" : ""}">
+          <input type="radio" name="wq-picker-queue" value="${sq.id}" ${isActive ? "checked" : ""} />
+          <span class="watchqueue-queue-picker-name">${escapeHtml(sq.name)}</span>
+          <span class="watchqueue-queue-picker-count">${count}${isActive ? " · active" : ""}</span>
+        </label>`;
+      }).join("");
+      overlay.innerHTML = `
+        <div class="watchqueue-name-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+          <div class="watchqueue-name-header">
+            <strong>${escapeHtml(title)}</strong>
+            <button type="button" data-action="cancel" aria-label="Close">×</button>
+          </div>
+          <div class="watchqueue-queue-picker-list">${radioRows}</div>
+          <div class="watchqueue-name-actions">
+            <button type="button" data-action="cancel">Cancel</button>
+            <button type="button" data-action="confirm">${escapeHtml(confirmText)}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const cleanup = (value) => { overlay.remove(); resolve(value); };
+      overlay.addEventListener("mousedown", (event) => { if (event.target === overlay) cleanup(null); });
+      overlay.querySelectorAll("[data-action='cancel']").forEach((button) => button.addEventListener("click", () => cleanup(null)));
+      overlay.querySelector("[data-action='confirm']")?.addEventListener("click", () => {
+        const selected = overlay.querySelector("input[name='wq-picker-queue']:checked");
+        cleanup(selected ? selected.value : null);
+      });
+      document.addEventListener("keydown", function onKey(event) {
+        if (event.key === "Escape") { document.removeEventListener("keydown", onKey); cleanup(null); }
+      });
+    });
+  }
+
+  // Helper: picks a target queue (shows dialog if multiple exist), then adds videos.
+  // Returns null if user cancelled, otherwise { addedCount, duplicateCount, queueName }.
+  async function pickQueueAndAddVideo(video) {
+    const state = await WatchQueueStorage.getState();
+    const queues = state.savedQueues || [];
+    if (queues.length < 2) {
+      const result = await WatchQueueManager.addVideo(video);
+      return { ...result, queueName: null };
+    }
+    const targetId = await showQueuePickerDialog({ title: "Add to which queue?", confirmText: "Add" });
+    if (!targetId) return null;
+    const result = await WatchQueueManager.addVideoToSpecificQueue(targetId, video);
+    const targetName = queues.find((q) => q.id === targetId)?.name || "queue";
+    return { ...result, queueName: targetName };
+  }
+
+  async function pickQueueAndAddPlaylist(playlistId) {
+    const state = await WatchQueueStorage.getState();
+    const queues = state.savedQueues || [];
+    if (queues.length < 2) {
+      const result = await WatchQueueManager.addPlaylistToQueue(playlistId);
+      return { ...result, queueName: null };
+    }
+    const targetId = await showQueuePickerDialog({ title: "Add playlist to which queue?", confirmText: "Add all" });
+    if (!targetId) return null;
+    const result = await WatchQueueManager.addPlaylistToSpecificQueue(playlistId, targetId);
+    const targetName = queues.find((q) => q.id === targetId)?.name || "queue";
+    return { ...result, queueName: targetName };
   }
 
   function decodeYouTubeText(value) {
@@ -770,6 +846,22 @@
     window.location.assign(url.toString());
   }
 
+  function restoreScrollPositions(container, positions) {
+    if (!container || !positions || !Object.keys(positions).length) return;
+    // Immediate attempt
+    for (const [sel, top] of Object.entries(positions)) {
+      const el = container.querySelector(sel);
+      if (el) el.scrollTop = top;
+    }
+    // Retry after layout in case the DOM isn't fully measured yet
+    requestAnimationFrame(() => {
+      for (const [sel, top] of Object.entries(positions)) {
+        const el = container.querySelector(sel);
+        if (el && Math.abs(el.scrollTop - top) > 2) el.scrollTop = top;
+      }
+    });
+  }
+
   function formatTime(seconds) {
     if (!seconds || seconds <= 0) return "0:00";
     const hrs = Math.floor(seconds / 3600);
@@ -1041,11 +1133,13 @@
 
         <div class="watchqueue-settings-group">
           <h4>Auto-next</h4>
-          ${sliderControl("autoNextDelaySeconds", "Delay before next video", 0, 30, num(s.autoNextDelaySeconds, 10))}
-          ${toggleControl("autoNextNearEnd", "Trigger near the end", s.autoNextNearEnd !== false, "Start the countdown when you scrub close to the end.")}
-          ${sliderControl("nearEndSeconds", "Near-end window", 3, 30, num(s.nearEndSeconds, 10))}
+          ${toggleControl("autoNextEnabled", "Auto-play next video", s.autoNextEnabled !== false, "Automatically play the next queued video when one finishes or nears the end.")}
+          <div class="watchqueue-autonext-details ${s.autoNextEnabled === false ? "watchqueue-hidden" : ""}">
+            ${sliderControl("autoNextDelaySeconds", "Countdown delay", 0, 30, num(s.autoNextDelaySeconds, 10))}
+            ${sliderControl("nearEndSeconds", "Near-end trigger window", 3, 30, num(s.nearEndSeconds, 10), "s before end")}
+          </div>
           ${toggleControl("loopQueue", "Loop queue", Boolean(s.loopQueue), "Wrap back to the top when the queue ends.")}
-          ${toggleControl("autoRemoveWatched", "Auto-remove watched", Boolean(s.autoRemoveWatched), "Drop videos from the queue once finished.")}
+          ${toggleControl("autoRemoveWatched", "Auto-remove watched", Boolean(s.autoRemoveWatched), "Drop videos from the queue once they finish.")}
         </div>
 
         <div class="watchqueue-settings-group">
@@ -1061,14 +1155,26 @@
         </div>
 
         <div class="watchqueue-settings-group">
-          <h4>Storage</h4>
-          ${sliderControl("progressRetentionDays", "Keep timestamps for", 7, 365, num(s.progressRetentionDays, 90), " days")}
+          <h4>Storage &amp; history</h4>
+          ${toggleControl("keepTimestamps", "Save watch progress", s.keepTimestamps !== false, "Track playback position for each video.")}
+          <div class="watchqueue-timestamps-details ${s.keepTimestamps === false ? "watchqueue-hidden" : ""}">
+            ${sliderControl("progressRetentionDays", "Keep timestamps for", 7, 365, num(s.progressRetentionDays, 90), " days")}
+          </div>
           <div class="watchqueue-setting watchqueue-setting-info">
             <span class="watchqueue-setting-desc">Saved timestamps: <strong data-progress-count>…</strong> videos tracked</span>
           </div>
           <div class="watchqueue-settings-buttons">
             <button type="button" data-action="prune-progress">Prune old timestamps</button>
             <button type="button" data-action="clear-progress" class="watchqueue-danger-outline">Clear all timestamps</button>
+          </div>
+          <div class="watchqueue-setting" style="margin-top:8px">
+            <div class="watchqueue-setting-top"><label>Clear watch history</label></div>
+            <div class="watchqueue-settings-buttons">
+              <button type="button" data-action="clear-history-hour">Last hour</button>
+              <button type="button" data-action="clear-history-day">Last day</button>
+              <button type="button" data-action="clear-history-week">Last week</button>
+              <button type="button" data-action="clear-history-month">Last month</button>
+            </div>
           </div>
         </div>
 
@@ -1085,6 +1191,65 @@
         </div>
 
         <div class="watchqueue-settings-footer">WatchQueue · your queue, playlists and settings stay on this device.</div>
+      </div>`;
+  }
+
+  function formatRelativeTime(timestamp) {
+    if (!timestamp) return "";
+    const diff = Date.now() - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 1) return "Just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    if (days < 30) return `${Math.floor(days / 7)}w ago`;
+    return new Date(timestamp).toLocaleDateString();
+  }
+
+  function buildHistoryPage(state) {
+    const entries = Object.entries(state.progress || {})
+      .filter(([, entry]) => entry.lastWatchedSeconds > 0 || entry.completed)
+      .map(([videoId, entry]) => {
+        const queueItem = state.queue.find((v) => v.videoId === videoId);
+        const playlistItem = !queueItem ? (state.playlists || []).flatMap((pl) => pl.videos || []).find((v) => v.videoId === videoId) : null;
+        const savedQueueItem = !queueItem && !playlistItem ? (state.savedQueues || []).flatMap((sq) => sq.queue || []).find((v) => v.videoId === videoId) : null;
+        const meta = queueItem || playlistItem || savedQueueItem || {};
+        return {
+          videoId,
+          title: meta.title || `YouTube video ${videoId}`,
+          channelName: meta.channelName || "YouTube",
+          thumbnailUrl: meta.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          durationText: meta.durationText || "",
+          lastWatchedSeconds: entry.lastWatchedSeconds || 0,
+          durationSeconds: entry.durationSeconds || 0,
+          completed: Boolean(entry.completed),
+          updatedAt: entry.updatedAt || 0
+        };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    const historyRows = entries.map((item) => {
+      const progress = item.durationSeconds ? `${formatTime(item.lastWatchedSeconds)} / ${formatTime(item.durationSeconds)}` : item.lastWatchedSeconds ? `Saved ${formatTime(item.lastWatchedSeconds)}` : "Not started";
+      const percentage = item.durationSeconds ? Math.min(100, Math.round((item.lastWatchedSeconds / item.durationSeconds) * 100)) : 0;
+      const displayTitle = isBadVideoTitle(item.title) ? `Video · ${item.videoId}` : item.title;
+      const searchKey = `${displayTitle} ${item.channelName}`.toLowerCase();
+      return `<li class="watchqueue-row ${item.completed ? "watchqueue-row-done" : ""}" data-video-id="${item.videoId}" data-search="${escapeHtml(searchKey)}">
+        <span class="watchqueue-row-number" style="font-size:10px;color:var(--wq-muted)">${formatRelativeTime(item.updatedAt)}</span>
+        <div class="watchqueue-thumb-wrap"><img class="watchqueue-thumb" src="${escapeHtml(item.thumbnailUrl)}" alt="" loading="lazy" />${item.durationText ? `<span class="watchqueue-thumb-time">${escapeHtml(item.durationText)}</span>` : ""}<span class="watchqueue-progress-bar"><span style="width:${percentage}%"></span></span>${item.completed ? `<span class="watchqueue-done-badge" title="Watched">✓</span>` : ""}</div>
+        <div class="watchqueue-row-main"><button class="watchqueue-title" type="button" data-action="history-play" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</button><div class="watchqueue-meta"><span class="watchqueue-meta-channel">${escapeHtml(item.channelName)}</span><span class="watchqueue-meta-progress">${progress}${item.completed ? " · Done" : ""}</span></div></div>
+        <div class="watchqueue-row-actions"><button class="watchqueue-icon-button watchqueue-reset-button" type="button" title="Reset timestamp" data-action="history-reset">${toolbarIcon("reset")}</button></div>
+      </li>`;
+    }).join("");
+
+    const noMatchMarkup = `<li class="watchqueue-empty watchqueue-no-match" hidden><strong>No matches.</strong></li>`;
+
+    return `
+      <div class="watchqueue-scroll watchqueue-history-scroll">
+        ${entries.length > 3 ? `<div class="watchqueue-search-row"><div class="watchqueue-search"><span class="watchqueue-search-icon">⌕</span><input type="text" placeholder="Search history" value="${escapeHtml(WQ.historySearch)}" data-action="history-search" /></div></div>` : ""}
+        <ul class="watchqueue-list watchqueue-history-list" style="grid-template-columns:unset">${historyRows ? historyRows + noMatchMarkup : `<li class="watchqueue-empty"><strong>No watch history yet.</strong><span>Videos you watch will appear here.</span></li>`}</ul>
+        ${entries.length ? `<div class="watchqueue-actions"><button type="button" data-action="history-clear-all" class="watchqueue-danger-outline">Clear all history</button></div>` : ""}
       </div>`;
   }
 
@@ -1234,6 +1399,20 @@
         await WatchQueueManager.updateSettings({ [key]: toggle.checked });
         await loadSettings();
         if (key === "showThumbnailButtons") await injectThumbnailButtons();
+        // Show/hide conditional sub-sections
+        if (key === "autoNextEnabled") {
+          const details = WQ.panel.querySelector(".watchqueue-autonext-details");
+          if (details) details.classList.toggle("watchqueue-hidden", !toggle.checked);
+        }
+        if (key === "keepTimestamps") {
+          const details = WQ.panel.querySelector(".watchqueue-timestamps-details");
+          if (details) details.classList.toggle("watchqueue-hidden", !toggle.checked);
+        }
+        // When auto-remove is turned ON, sweep existing completed videos
+        if (key === "autoRemoveWatched" && toggle.checked) {
+          await WatchQueueManager.removeCompletedFromQueue();
+          await renderWidget();
+        }
       });
     });
     // data buttons
@@ -1282,6 +1461,19 @@
       if (el) el.textContent = "0";
       showToast("All timestamps cleared");
     });
+    // clear watch history by age
+    for (const period of ["hour", "day", "week", "month"]) {
+      WQ.panel.querySelector(`[data-action='clear-history-${period}']`)?.addEventListener("click", async () => {
+        const labels = { hour: "last hour", day: "last 24 hours", week: "last 7 days", month: "last 30 days" };
+        const ok = await showConfirmDialog({ title: "Clear watch history", message: `Remove all watch history from the ${labels[period]}?`, confirmText: "Clear" });
+        if (!ok) return;
+        await WatchQueueManager.clearProgressByAge(period);
+        const afterCount = await WatchQueueManager.getProgressCount();
+        const el = WQ.panel?.querySelector("[data-progress-count]");
+        if (el) el.textContent = String(afterCount);
+        showToast(`Cleared history from ${labels[period]}`);
+      });
+    }
   }
 
   function applyQueueFilter() {
@@ -1326,6 +1518,23 @@
     if (!list) return;
     const term = (WQ.playlistVideoSearch || "").trim().toLowerCase();
     const rows = Array.from(list.querySelectorAll(".watchqueue-playlist-video-row"));
+    let visibleCount = 0;
+    rows.forEach((row) => {
+      const key = row.dataset.search || "";
+      const match = !term || key.includes(term);
+      row.hidden = !match;
+      if (match) visibleCount += 1;
+    });
+    const noMatch = list.querySelector(".watchqueue-no-match");
+    if (noMatch) noMatch.hidden = !(term && rows.length && visibleCount === 0);
+  }
+
+  function applyHistoryFilter() {
+    if (!WQ.panel) return;
+    const list = WQ.panel.querySelector(".watchqueue-history-list");
+    if (!list) return;
+    const term = (WQ.historySearch || "").trim().toLowerCase();
+    const rows = Array.from(list.querySelectorAll(".watchqueue-row"));
     let visibleCount = 0;
     rows.forEach((row) => {
       const key = row.dataset.search || "";
@@ -1609,8 +1818,8 @@
       const isQueued = state.queue.some((queueItem) => queueItem.videoId === item.videoId);
       const hasProgress = watched > 0 || completed;
       const searchKey = `${displayTitle} ${channel}`.toLowerCase();
-      return `<li class="watchqueue-row watchqueue-playlist-video-row ${completed ? "watchqueue-row-done" : ""}" data-video-id="${item.videoId}" data-search="${escapeHtml(searchKey)}">
-        <span class="watchqueue-row-number">${index + 1}</span>
+      return `<li class="watchqueue-row watchqueue-playlist-video-row ${completed ? "watchqueue-row-done" : ""}" draggable="true" data-video-id="${item.videoId}" data-index="${index}" data-search="${escapeHtml(searchKey)}">
+        <span class="watchqueue-drag" title="Drag to reorder">⋮⋮</span>
         <div class="watchqueue-thumb-wrap"><img class="watchqueue-thumb" src="${escapeHtml(item.thumbnailUrl)}" alt="" loading="lazy" />${completed ? `<span class="watchqueue-done-badge" title="Watched">✓</span>` : ""}</div>
         <div class="watchqueue-row-main"><button class="watchqueue-title" type="button" data-action="playlist-video-play" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</button><div class="watchqueue-meta"><span class="watchqueue-meta-channel">${escapeHtml(channel)}</span><span class="watchqueue-meta-progress">${escapeHtml(progressText)}${completed ? " · Done" : ""}</span>${item.publishedText ? `<span class="watchqueue-meta-date">${escapeHtml(item.publishedText)}</span>` : ""}</div></div>
         <div class="watchqueue-row-actions">${hasProgress ? `<button class="watchqueue-icon-button watchqueue-reset-button" type="button" title="Reset timestamp" data-action="playlist-video-reset">${toolbarIcon("reset")}</button>` : ""}<button class="watchqueue-playlist-queue-button watchqueue-plus-button ${isQueued ? "is-queued" : ""}" type="button" title="${isQueued ? "Already in queue" : "Add video to queue"}" data-action="playlist-video-queue" ${isQueued ? "disabled" : ""}>${isQueued ? "✓" : "+"}</button></div>
@@ -1637,7 +1846,7 @@
 
     // Preserve scroll positions across re-render
     const scrollPositions = {};
-    for (const sel of [".watchqueue-list", ".watchqueue-playlist-scroll", ".watchqueue-playlist-detail", ".watchqueue-settings-scroll"]) {
+    for (const sel of [".watchqueue-list", ".watchqueue-playlist-scroll", ".watchqueue-playlist-detail", ".watchqueue-settings-scroll", ".watchqueue-history-scroll", ".watchqueue-history-list", ".watchqueue-playlist-video-list"]) {
       const el = WQ.panel.querySelector(sel);
       if (el && el.scrollTop > 0) scrollPositions[sel] = el.scrollTop;
     }
@@ -1650,13 +1859,14 @@
       <div class="watchqueue-tabs">
         <button class="${WQ.activeTab === "queue" ? "active" : ""}" data-tab="queue">Queue</button>
         <button class="${WQ.activeTab === "playlists" ? "active" : ""}" data-tab="playlists">Lists</button>
+        <button class="${WQ.activeTab === "history" ? "active" : ""}" data-tab="history">History</button>
         <button class="${WQ.activeTab === "settings" ? "active" : ""}" data-tab="settings">Settings</button>
       </div>
 
       <div class="watchqueue-tab-page ${WQ.activeTab !== "queue" ? "watchqueue-hidden" : ""}">
         ${(state.savedQueues || []).length > 0 ? `<div class="watchqueue-queue-selector">
           <div class="watchqueue-queue-radios">
-            ${(state.savedQueues || []).map((sq) => `<label class="watchqueue-queue-radio ${sq.id === state.activeQueueId ? "is-active" : ""}" title="${escapeHtml(sq.name)}"><input type="radio" name="wq-active-queue" value="${sq.id}" ${sq.id === state.activeQueueId ? "checked" : ""} /><span>${escapeHtml(sq.name)}</span><span class="watchqueue-queue-count">${(sq.id === state.activeQueueId ? state.queue : sq.queue || []).length}</span></label>`).join("")}
+            ${(state.savedQueues || []).map((sq, sqIdx) => `<label class="watchqueue-queue-radio ${sq.id === state.activeQueueId ? "is-active" : ""}" draggable="true" data-queue-id="${sq.id}" data-queue-index="${sqIdx}" title="${escapeHtml(sq.name)}"><input type="radio" name="wq-active-queue" value="${sq.id}" ${sq.id === state.activeQueueId ? "checked" : ""} /><span>${escapeHtml(sq.name)}</span><span class="watchqueue-queue-count">${(sq.id === state.activeQueueId ? state.queue : sq.queue || []).length}</span></label>`).join("")}
           </div>
           <div class="watchqueue-queue-selector-actions"><button type="button" data-action="new-queue" title="Create a new queue">+</button><button type="button" data-action="rename-queue" title="Rename active queue" ${!state.activeQueueId ? "disabled" : ""}>✎</button><button type="button" data-action="delete-queue" title="Delete active queue" ${!state.activeQueueId || (state.savedQueues || []).length < 2 ? "disabled" : ""}>×</button></div>
         </div>` : `<div class="watchqueue-queue-selector watchqueue-queue-selector-minimal"><button type="button" class="watchqueue-queue-new-btn" data-action="new-queue" title="Create additional named queues">+ New queue</button></div>`}
@@ -1696,6 +1906,8 @@
 
       <div class="watchqueue-tab-page ${WQ.activeTab !== "playlists" ? "watchqueue-hidden" : ""}">${playlistPage}</div>
 
+      <div class="watchqueue-tab-page ${WQ.activeTab !== "history" ? "watchqueue-hidden" : ""}">${WQ.activeTab === "history" ? buildHistoryPage(state) : ""}</div>
+
       <div class="watchqueue-tab-page ${WQ.activeTab !== "settings" ? "watchqueue-hidden" : ""}">${WQ.activeTab === "settings" ? buildSettingsPage(state) : ""}</div>`;
 
     WQ.panel.querySelector(".watchqueue-close")?.addEventListener("click", () => { WQ.userOpenedPanel = false; WQ.panel.hidden = true; });
@@ -1706,14 +1918,43 @@
         if (popover) popover.classList.add("watchqueue-hidden");
       }
     });
-    WQ.panel.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", async () => { WQ.activeTab = button.dataset.tab; WQ.sleepPopoverOpen = false; if (WQ.activeTab !== "playlists") { WQ.selectedPlaylistId = null; WQ.playlistSearch = ""; WQ.playlistVideoSearch = ""; } await renderPanel(); }));
+    WQ.panel.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", async () => { WQ.activeTab = button.dataset.tab; WQ.sleepPopoverOpen = false; if (WQ.activeTab !== "playlists") { WQ.selectedPlaylistId = null; WQ.playlistSearch = ""; WQ.playlistVideoSearch = ""; } if (WQ.activeTab !== "history") { WQ.historySearch = ""; } await renderPanel(); }));
 
     if (WQ.activeTab === "settings") {
       bindSettingsHandlers(state);
-      for (const [sel, top] of Object.entries(scrollPositions)) {
-        const el = WQ.panel.querySelector(sel);
-        if (el) el.scrollTop = top;
+      restoreScrollPositions(WQ.panel, scrollPositions);
+      return;
+    }
+
+    if (WQ.activeTab === "history") {
+      // History search
+      const historySearchInput = WQ.panel.querySelector("[data-action='history-search']");
+      if (historySearchInput) {
+        historySearchInput.addEventListener("input", () => {
+          WQ.historySearch = historySearchInput.value;
+          applyHistoryFilter();
+        });
+        applyHistoryFilter();
       }
+      // History row handlers
+      WQ.panel.querySelectorAll(".watchqueue-history-list .watchqueue-row").forEach((row) => {
+        row.addEventListener("click", async (event) => {
+          const action = event.target?.closest("[data-action]")?.dataset?.action;
+          const videoId = row.dataset.videoId;
+          if (!videoId) return;
+          if (action === "history-play") await navigateToVideo({ videoId, lastWatchedSeconds: 0 });
+          if (action === "history-reset") { await WatchQueueManager.resetVideoProgress(videoId); await renderPanel(); showToast("Timestamp reset"); }
+        });
+      });
+      // Clear all history
+      WQ.panel.querySelector("[data-action='history-clear-all']")?.addEventListener("click", async () => {
+        const ok = await showConfirmDialog({ title: "Clear all history", message: "Remove all watch history? Queue and playlist data is kept.", confirmText: "Clear all", danger: true });
+        if (!ok) return;
+        await WatchQueueManager.clearAllProgress();
+        await renderPanel();
+        showToast("Watch history cleared");
+      });
+      restoreScrollPositions(WQ.panel, scrollPositions);
       return;
     }
 
@@ -1766,6 +2007,8 @@
       const enabled = !state.settings?.autoRemoveWatched;
       await WatchQueueManager.updateSettings({ autoRemoveWatched: enabled });
       await loadSettings();
+      if (enabled) await WatchQueueManager.removeCompletedFromQueue();
+      await renderWidget();
       await renderPanel();
       showToast(enabled ? "Auto-remove enabled" : "Auto-remove disabled");
     });
@@ -1822,7 +2065,15 @@
       await renderPanel();
     });
     WQ.panel.querySelector("[data-action='playlist-play-first']")?.addEventListener("click", () => selectedPlaylist?.videos?.[0] && navigateToVideo(selectedPlaylist.videos[0]));
-    WQ.panel.querySelector("[data-action='playlist-add-all']")?.addEventListener("click", async () => { if (!selectedPlaylist) return; const result = await WatchQueueManager.addPlaylistToQueue(selectedPlaylist.id); await renderWidget(); await renderPanel(); showToast(`Added ${result.addedCount} videos to queue`); });
+    WQ.panel.querySelector("[data-action='playlist-add-all']")?.addEventListener("click", async () => {
+      if (!selectedPlaylist) return;
+      const result = await pickQueueAndAddPlaylist(selectedPlaylist.id);
+      if (!result) return;
+      await renderWidget();
+      await renderPanel();
+      const suffix = result.queueName ? ` to "${result.queueName}"` : " to queue";
+      showToast(`Added ${result.addedCount} videos${suffix}`);
+    });
     WQ.panel.querySelector("[data-action='playlist-delete-selected']")?.addEventListener("click", async () => {
       if (!selectedPlaylist) return;
       const ok = await showConfirmDialog({ title: "Delete playlist", message: `Delete "${selectedPlaylist.name}"? This can't be undone.`, confirmText: "Delete" });
@@ -1836,7 +2087,13 @@
       row.addEventListener("click", async (event) => {
         const action = event.target?.closest("[data-action]")?.dataset?.action;
         if (action === "playlist-open") { WQ.selectedPlaylistId = row.dataset.playlistId; await renderPanel(); }
-        if (action === "playlist-add") { const result = await WatchQueueManager.addPlaylistToQueue(row.dataset.playlistId); await renderWidget(); await renderPanel(); showToast(`Added ${result.addedCount} videos to queue`); }
+        if (action === "playlist-add") {
+          const result = await pickQueueAndAddPlaylist(row.dataset.playlistId);
+          if (!result) return;
+          await renderWidget(); await renderPanel();
+          const suffix = result.queueName ? ` to "${result.queueName}"` : " to queue";
+          showToast(`Added ${result.addedCount} videos${suffix}`);
+        }
         if (action === "playlist-delete") {
           const target = playlists.find((playlist) => playlist.id === row.dataset.playlistId);
           const ok = await showConfirmDialog({ title: "Delete playlist", message: `Delete "${target?.name || "this playlist"}"? This can't be undone.`, confirmText: "Delete" });
@@ -1855,16 +2112,42 @@
         if (!item) return;
         if (action === "playlist-video-play") await navigateToVideo(item);
         if (action === "playlist-video-queue") {
-          const result = await WatchQueueManager.addVideo(item);
+          const result = await pickQueueAndAddVideo(item);
+          if (!result) return;
           await renderWidget();
           await renderPanel();
-          showToast(result?.wasDuplicate ? "Already in queue" : "Added to queue");
+          if (result.wasDuplicate) {
+            showToast(result.queueName ? `Already in "${result.queueName}"` : "Already in queue");
+          } else {
+            showToast(result.queueName ? `Added to "${result.queueName}"` : "Added to queue");
+          }
         }
         if (action === "playlist-video-reset") { await WatchQueueManager.resetVideoProgress(videoId); await renderPanel(); showToast("Timestamp reset"); }
       });
+      // Drag-and-drop reorder for playlist videos
+      row.addEventListener("dragstart", (event) => {
+        if ((WQ.playlistVideoSearch || "").trim()) { event.preventDefault(); return; }
+        row.classList.add("watchqueue-dragging");
+        event.dataTransfer.setData("text/plain", row.dataset.index);
+        event.dataTransfer.setData("wq-drag-type", "playlist-video");
+      });
+      row.addEventListener("dragend", () => row.classList.remove("watchqueue-dragging"));
+      row.addEventListener("dragover", (event) => event.preventDefault());
+      row.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        if (!selectedPlaylist) return;
+        if ((WQ.playlistVideoSearch || "").trim()) return;
+        if (event.dataTransfer.getData("wq-drag-type") !== "playlist-video") return;
+        const fromIndex = Number(event.dataTransfer.getData("text/plain"));
+        const toIndex = Number(row.dataset.index);
+        if (Number.isInteger(fromIndex) && Number.isInteger(toIndex) && fromIndex !== toIndex) {
+          await WatchQueueManager.reorderPlaylistVideos(selectedPlaylist.id, fromIndex, toIndex);
+          await renderPanel();
+        }
+      });
     });
 
-    WQ.panel.querySelectorAll(".watchqueue-row[data-index]").forEach((row) => {
+    WQ.panel.querySelectorAll(".watchqueue-row[data-index]:not(.watchqueue-playlist-video-row)").forEach((row) => {
       row.addEventListener("click", async (event) => {
         const action = event.target?.closest("[data-action]")?.dataset?.action;
         const videoId = row.dataset.videoId;
@@ -1893,6 +2176,88 @@
     WQ.panel.querySelectorAll("input[name='wq-active-queue']").forEach((radio) => {
       radio.addEventListener("change", async () => {
         if (radio.value && radio.value !== state.activeQueueId) { await WatchQueueManager.switchQueue(radio.value); WQ.queueSearch = ""; await renderWidget(); await renderPanel(); showToast("Switched queue"); }
+      });
+    });
+    // Queue radio drag-and-drop for reorder + merge
+    let queueMergeTimer = null;
+    let queueMergeTarget = null;
+    function clearMergeIndicators() {
+      WQ.panel.querySelectorAll(".watchqueue-queue-radio").forEach((el) => {
+        el.classList.remove("watchqueue-merge-target");
+        el.querySelector(".watchqueue-merge-badge")?.remove();
+      });
+    }
+    WQ.panel.querySelectorAll(".watchqueue-queue-radio[draggable]").forEach((label) => {
+      label.addEventListener("dragstart", (event) => {
+        event.dataTransfer.setData("wq-queue-id", label.dataset.queueId);
+        event.dataTransfer.setData("wq-queue-index", label.dataset.queueIndex);
+        event.dataTransfer.effectAllowed = "move";
+        label.classList.add("watchqueue-dragging");
+      });
+      label.addEventListener("dragend", () => {
+        label.classList.remove("watchqueue-dragging");
+        if (queueMergeTimer) { clearTimeout(queueMergeTimer); queueMergeTimer = null; }
+        clearMergeIndicators();
+        queueMergeTarget = null;
+      });
+      label.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        const sourceId = event.dataTransfer.types.includes("wq-queue-id") ? "pending" : null;
+        if (!sourceId) return;
+        // Start merge timer when hovering over a different queue
+        if (queueMergeTarget !== label.dataset.queueId) {
+          if (queueMergeTimer) clearTimeout(queueMergeTimer);
+          clearMergeIndicators();
+          queueMergeTarget = label.dataset.queueId;
+          queueMergeTimer = setTimeout(() => {
+            label.classList.add("watchqueue-merge-target");
+            // Inject a visible "Merge" badge
+            if (!label.querySelector(".watchqueue-merge-badge")) {
+              const badge = document.createElement("span");
+              badge.className = "watchqueue-merge-badge";
+              badge.textContent = "⤵ Merge";
+              label.appendChild(badge);
+            }
+          }, 800);
+        }
+      });
+      label.addEventListener("dragleave", () => {
+        if (queueMergeTarget === label.dataset.queueId) {
+          if (queueMergeTimer) { clearTimeout(queueMergeTimer); queueMergeTimer = null; }
+          label.classList.remove("watchqueue-merge-target");
+          label.querySelector(".watchqueue-merge-badge")?.remove();
+          queueMergeTarget = null;
+        }
+      });
+      label.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        if (queueMergeTimer) { clearTimeout(queueMergeTimer); queueMergeTimer = null; }
+        const sourceId = event.dataTransfer.getData("wq-queue-id");
+        const sourceIndex = Number(event.dataTransfer.getData("wq-queue-index"));
+        const targetId = label.dataset.queueId;
+        const targetIndex = Number(label.dataset.queueIndex);
+        const isMerge = label.classList.contains("watchqueue-merge-target");
+        clearMergeIndicators();
+        if (!sourceId || sourceId === targetId) return;
+        // If the merge indicator is showing, merge the queues
+        if (isMerge) {
+          const sourceName = (state.savedQueues || []).find((q) => q.id === sourceId)?.name || "queue";
+          const targetName = (state.savedQueues || []).find((q) => q.id === targetId)?.name || "queue";
+          const ok = await showConfirmDialog({ title: "Merge queues", message: `Merge "${sourceName}" into "${targetName}"? The source queue will be removed and its videos added to the target.`, confirmText: "Merge" });
+          if (!ok) return;
+          await WatchQueueManager.mergeQueues(sourceId, targetId);
+          WQ.queueSearch = "";
+          await renderWidget();
+          await renderPanel();
+          showToast(`Merged into "${targetName}"`);
+        } else {
+          // Otherwise reorder
+          if (Number.isInteger(sourceIndex) && Number.isInteger(targetIndex) && sourceIndex !== targetIndex) {
+            await WatchQueueManager.reorderSavedQueues(sourceIndex, targetIndex);
+            await renderPanel();
+          }
+        }
       });
     });
     WQ.panel.querySelector("[data-action='new-queue']")?.addEventListener("click", async () => {
@@ -1944,10 +2309,7 @@
     }
 
     // Restore scroll positions after re-render
-    for (const [sel, top] of Object.entries(scrollPositions)) {
-      const el = WQ.panel.querySelector(sel);
-      if (el) el.scrollTop = top;
-    }
+    restoreScrollPositions(WQ.panel, scrollPositions);
   }
 
   function parseTimestampParam() {
@@ -1998,7 +2360,8 @@
     if (!currentId || WQ.autoNextHandledForVideoId === currentId || WQ.autoNextTimer) return;
     const state = await WatchQueueStorage.getState();
     if (!state.queueMode) return;
-    if (reason === "near-end" && state.settings?.autoNextNearEnd === false) return;
+    // Master toggle: if auto-next is disabled, don't auto-advance
+    if (state.settings?.autoNextEnabled === false) return;
     const next = WatchQueueManager.getNextVideo(state, currentId);
     if (!next) return;
     WQ.autoNextHandledForVideoId = currentId;
@@ -2108,10 +2471,13 @@
     document.addEventListener("pointerdown", closePanelFromOutside, true);
     window.addEventListener("resize", async () => { const state = await WatchQueueStorage.getState(); positionWidget(state.widgetPosition || getDefaultWidgetPosition()); });
     window.addEventListener("watchqueue:state-changed", async () => {
-      if (!WQ.panel || WQ.panel.hidden || WQ.activeTab === "settings") return;
+      if (!WQ.panel || WQ.panel.hidden) return;
+      // Settings and history tabs don't need live updates from progress saves
+      if (WQ.activeTab === "settings" || WQ.activeTab === "history") return;
       if (WQ.sleepPopoverOpen) return;
-      const active = WQ.panel.querySelector("[data-action='search']");
-      if (active && document.activeElement === active) return; // don't yank focus mid-search
+      // Don't re-render if any search input is focused — prevents scroll jump and focus loss
+      const focused = document.activeElement;
+      if (focused && focused.closest && focused.closest(".watchqueue-search, .watchqueue-search-row")) return;
       await renderPanel();
     });
     chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {

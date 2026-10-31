@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "WatchQueue",
-  "version": "0.3.3",
-  "description": "A modern YouTube-themed queue manager with watch progress, drag-and-drop ordering, auto-next playback, in-place search, shuffle, four-edge dockable widget, custom accent, playlist/show import, and a full settings panel.",
+  "version": "0.4.1",
+  "description": "A modern YouTube-themed queue manager with watch progress, drag-and-drop ordering, auto-next playback, in-place search, shuffle, four-edge dockable widget, custom accent, playlist/show import, watch history, queue merging, and a full settings panel.",
   "permissions": [
     "storage",
     "activeTab"

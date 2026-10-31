@@ -197,6 +197,9 @@ window.WatchQueueManager = {
     const completed = durationSeconds > 0 && lastWatchedSeconds / durationSeconds >= 0.96;
 
     return WatchQueueStorage.updateState((state) => {
+      // If timestamps are disabled, only track completion for auto-remove
+      if (state.settings?.keepTimestamps === false && !completed) return state;
+
       const progressEntry = {
         lastWatchedSeconds: Math.floor(lastWatchedSeconds),
         durationSeconds: Math.floor(durationSeconds || 0),
@@ -204,22 +207,26 @@ window.WatchQueueManager = {
         updatedAt: Date.now()
       };
 
+      const shouldAutoRemove = completed && state.settings?.autoRemoveWatched;
+
       return {
         ...state,
         progress: {
           ...state.progress,
           [videoId]: progressEntry
         },
-        queue: state.queue.map((item) =>
-          item.videoId === videoId
-            ? {
-                ...item,
-                lastWatchedSeconds: progressEntry.lastWatchedSeconds,
-                durationSeconds: progressEntry.durationSeconds,
-                completed: progressEntry.completed
-              }
-            : item
-        ),
+        queue: shouldAutoRemove
+          ? state.queue.filter((item) => item.videoId !== videoId)
+          : state.queue.map((item) =>
+              item.videoId === videoId
+                ? {
+                    ...item,
+                    lastWatchedSeconds: progressEntry.lastWatchedSeconds,
+                    durationSeconds: progressEntry.durationSeconds,
+                    completed: progressEntry.completed
+                  }
+                : item
+            ),
         playlists: (state.playlists || []).map((playlist) => ({
           ...playlist,
           videos: (playlist.videos || []).map((item) =>
@@ -388,6 +395,79 @@ window.WatchQueueManager = {
     return this.addVideos(playlist.videos || []);
   },
 
+  // ---------- Add to a specific named queue ----------
+
+  async addVideoToSpecificQueue(targetQueueId, video) {
+    if (!targetQueueId || !video?.videoId) return { wasDuplicate: false };
+    let wasDuplicate = false;
+    await WatchQueueStorage.updateState((state) => {
+      // If the target is the active queue, add to state.queue directly
+      if (targetQueueId === state.activeQueueId) {
+        const exists = state.queue.some((item) => item.videoId === video.videoId);
+        if (exists) { wasDuplicate = true; return state; }
+        const cleanedTitle = !watchQueueIsBadTitle(video.title) ? watchQueueCleanText(video.title) : `YouTube video ${video.videoId}`;
+        const progress = state.progress?.[video.videoId] || {};
+        const nextItem = {
+          videoId: video.videoId,
+          title: cleanedTitle || "Untitled video",
+          channelName: video.channelName || "YouTube",
+          thumbnailUrl: video.thumbnailUrl || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+          durationText: video.durationText || "",
+          publishedText: video.publishedText || "",
+          lastWatchedSeconds: progress.lastWatchedSeconds || 0,
+          durationSeconds: progress.durationSeconds || 0,
+          completed: progress.completed || false,
+          addedAt: Date.now()
+        };
+        return { ...state, queue: [...state.queue, nextItem] };
+      }
+      // Otherwise, add to the savedQueues entry
+      const savedQueues = (state.savedQueues || []).map((sq) => {
+        if (sq.id !== targetQueueId) return sq;
+        const queue = sq.queue || [];
+        if (queue.some((item) => item.videoId === video.videoId)) { wasDuplicate = true; return sq; }
+        const cleanedTitle = !watchQueueIsBadTitle(video.title) ? watchQueueCleanText(video.title) : `YouTube video ${video.videoId}`;
+        const progress = state.progress?.[video.videoId] || {};
+        return {
+          ...sq,
+          queue: [...queue, {
+            videoId: video.videoId,
+            title: cleanedTitle || "Untitled video",
+            channelName: video.channelName || "YouTube",
+            thumbnailUrl: video.thumbnailUrl || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+            durationText: video.durationText || "",
+            publishedText: video.publishedText || "",
+            lastWatchedSeconds: progress.lastWatchedSeconds || 0,
+            durationSeconds: progress.durationSeconds || 0,
+            completed: progress.completed || false,
+            addedAt: Date.now()
+          }],
+          updatedAt: Date.now()
+        };
+      });
+      return { ...state, savedQueues };
+    });
+    return { wasDuplicate };
+  },
+
+  async addVideosToSpecificQueue(targetQueueId, videos) {
+    let addedCount = 0;
+    let duplicateCount = 0;
+    for (const video of videos) {
+      const result = await this.addVideoToSpecificQueue(targetQueueId, video);
+      if (result.wasDuplicate) duplicateCount += 1;
+      else addedCount += 1;
+    }
+    return { addedCount, duplicateCount };
+  },
+
+  async addPlaylistToSpecificQueue(playlistId, targetQueueId) {
+    const state = await WatchQueueStorage.getState();
+    const playlist = (state.playlists || []).find((item) => item.id === playlistId);
+    if (!playlist) return { addedCount: 0, duplicateCount: 0 };
+    return this.addVideosToSpecificQueue(targetQueueId, playlist.videos || []);
+  },
+
   // ---------- Multi-queue ----------
 
   async createNewQueue(name) {
@@ -487,5 +567,119 @@ window.WatchQueueManager = {
 
   async clearAllProgress() {
     return WatchQueueStorage.updateState((state) => ({ ...state, progress: {} }));
+  },
+
+  // ---------- Playlist video reorder ----------
+
+  async reorderPlaylistVideos(playlistId, fromIndex, toIndex) {
+    if (!playlistId || !Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return WatchQueueStorage.getState();
+    return WatchQueueStorage.updateState((state) => ({
+      ...state,
+      playlists: (state.playlists || []).map((playlist) => {
+        if (playlist.id !== playlistId) return playlist;
+        const videos = [...(playlist.videos || [])];
+        const [moved] = videos.splice(fromIndex, 1);
+        videos.splice(toIndex, 0, moved);
+        return { ...playlist, videos, updatedAt: Date.now() };
+      })
+    }));
+  },
+
+  // ---------- Saved queue reorder & merge ----------
+
+  async reorderSavedQueues(fromIndex, toIndex) {
+    if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex) || fromIndex === toIndex) return WatchQueueStorage.getState();
+    return WatchQueueStorage.updateState((state) => {
+      const savedQueues = [...(state.savedQueues || [])];
+      // sync current queue into its slot first
+      if (state.activeQueueId) {
+        const idx = savedQueues.findIndex((q) => q.id === state.activeQueueId);
+        if (idx !== -1) savedQueues[idx] = { ...savedQueues[idx], queue: state.queue, shuffleOriginalOrder: state.shuffleOriginalOrder, updatedAt: Date.now() };
+      }
+      const [moved] = savedQueues.splice(fromIndex, 1);
+      savedQueues.splice(toIndex, 0, moved);
+      return { ...state, savedQueues };
+    });
+  },
+
+  async mergeQueues(sourceQueueId, targetQueueId) {
+    if (!sourceQueueId || !targetQueueId || sourceQueueId === targetQueueId) return WatchQueueStorage.getState();
+    return WatchQueueStorage.updateState((state) => {
+      const savedQueues = [...(state.savedQueues || [])];
+      // sync current queue into its slot first
+      if (state.activeQueueId) {
+        const idx = savedQueues.findIndex((q) => q.id === state.activeQueueId);
+        if (idx !== -1) savedQueues[idx] = { ...savedQueues[idx], queue: state.queue, shuffleOriginalOrder: state.shuffleOriginalOrder, updatedAt: Date.now() };
+      }
+      const sourceIdx = savedQueues.findIndex((q) => q.id === sourceQueueId);
+      const targetIdx = savedQueues.findIndex((q) => q.id === targetQueueId);
+      if (sourceIdx === -1 || targetIdx === -1) return state;
+      const sourceQueue = savedQueues[sourceIdx].queue || [];
+      const targetQueue = savedQueues[targetIdx].queue || [];
+      // Merge: add source videos to target, skip duplicates
+      const existingIds = new Set(targetQueue.map((v) => v.videoId));
+      const merged = [...targetQueue, ...sourceQueue.filter((v) => !existingIds.has(v.videoId))];
+      savedQueues[targetIdx] = { ...savedQueues[targetIdx], queue: merged, updatedAt: Date.now() };
+      // Remove source queue
+      savedQueues.splice(sourceIdx, 1);
+      // If source was active, switch to target
+      const newActiveId = state.activeQueueId === sourceQueueId ? targetQueueId : state.activeQueueId;
+      const activeSlot = savedQueues.find((q) => q.id === newActiveId);
+      return {
+        ...state,
+        savedQueues,
+        activeQueueId: newActiveId,
+        queue: activeSlot ? (activeSlot.queue || []) : state.queue,
+        shuffleOriginalOrder: activeSlot ? (activeSlot.shuffleOriginalOrder || null) : state.shuffleOriginalOrder,
+        settings: { ...(window.WATCHQUEUE_DEFAULT_SETTINGS || {}), ...(state.settings || {}), shuffleQueue: false }
+      };
+    });
+  },
+
+  // ---------- Watch history ----------
+
+  async getWatchHistory() {
+    const state = await WatchQueueStorage.getState();
+    const entries = Object.entries(state.progress || {})
+      .filter(([, entry]) => entry.lastWatchedSeconds > 0 || entry.completed)
+      .map(([videoId, entry]) => {
+        // Try to find title info from queue or playlists
+        const queueItem = state.queue.find((v) => v.videoId === videoId);
+        const playlistItem = !queueItem ? (state.playlists || []).flatMap((pl) => pl.videos || []).find((v) => v.videoId === videoId) : null;
+        const savedQueueItem = !queueItem && !playlistItem ? (state.savedQueues || []).flatMap((sq) => sq.queue || []).find((v) => v.videoId === videoId) : null;
+        const meta = queueItem || playlistItem || savedQueueItem || {};
+        return {
+          videoId,
+          title: meta.title || `YouTube video ${videoId}`,
+          channelName: meta.channelName || "YouTube",
+          thumbnailUrl: meta.thumbnailUrl || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          durationText: meta.durationText || "",
+          lastWatchedSeconds: entry.lastWatchedSeconds || 0,
+          durationSeconds: entry.durationSeconds || 0,
+          completed: Boolean(entry.completed),
+          updatedAt: entry.updatedAt || 0
+        };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return entries;
+  },
+
+  async clearProgressByAge(period) {
+    return WatchQueueStorage.updateState((state) => {
+      const now = Date.now();
+      let cutoff;
+      if (period === "hour") cutoff = now - 60 * 60 * 1000;
+      else if (period === "day") cutoff = now - 24 * 60 * 60 * 1000;
+      else if (period === "week") cutoff = now - 7 * 24 * 60 * 60 * 1000;
+      else if (period === "month") cutoff = now - 30 * 24 * 60 * 60 * 1000;
+      else return { ...state, progress: {} }; // "all"
+
+      const prunedProgress = {};
+      for (const [videoId, entry] of Object.entries(state.progress || {})) {
+        if ((entry.updatedAt || 0) < cutoff) continue; // remove old entries
+        prunedProgress[videoId] = entry;
+      }
+      return { ...state, progress: prunedProgress };
+    });
   }
 };

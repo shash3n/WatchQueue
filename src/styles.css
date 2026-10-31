@@ -2,6 +2,18 @@
    WatchQueue 0.3.0 — modern YouTube-themed UI
    ========================================================================== */
 
+/* Keep page/other-extension web fonts out of our UI. Layout reads such as
+   getBoundingClientRect() can otherwise trigger a blocked cross-origin font
+   load and attribute the error to the content script doing the layout read.
+   Include descendants because form controls and page rules can override
+   inheritance. Limit this to our UI, not YouTube thumbnail containers. */
+:is(.watchqueue-widget, .watchqueue-panel, .watchqueue-toast,
+    .watchqueue-name-dialog, .watchqueue-add-button),
+:is(.watchqueue-widget, .watchqueue-panel, .watchqueue-toast,
+    .watchqueue-name-dialog, .watchqueue-add-button) * {
+  font-family: system-ui, "Segoe UI", Arial, sans-serif !important;
+}
+
 /* ---- Theme tokens ---- */
 .watchqueue-light {
   --wq-bg: #ffffff;
@@ -1142,7 +1154,7 @@
 }
 
 .watchqueue-playlist-video-row {
-  grid-template-columns: 22px 82px minmax(0, 1fr) auto;
+  grid-template-columns: 16px 82px minmax(0, 1fr) auto;
 }
 
 .watchqueue-playlist-queue-button {
@@ -1589,6 +1601,67 @@
 }
 
 /* ==========================================================================
+   Queue picker dialog
+   ========================================================================== */
+.watchqueue-queue-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.watchqueue-queue-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--wq-border);
+  border-radius: 10px;
+  background: var(--wq-bg-soft);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.watchqueue-queue-picker-option:hover {
+  border-color: var(--wq-red, #ff0033);
+}
+
+.watchqueue-queue-picker-option:has(input:checked) {
+  border-color: var(--wq-red, #ff0033);
+  background: color-mix(in srgb, var(--wq-red, #ff0033) 10%, var(--wq-bg-soft));
+}
+
+.watchqueue-queue-picker-option input[type="radio"] {
+  accent-color: var(--wq-red, #ff0033);
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.watchqueue-queue-picker-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wq-text);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.watchqueue-queue-picker-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wq-muted);
+  white-space: nowrap;
+}
+
+/* ==========================================================================
    Watch-page playlist panel import button
    ========================================================================== */
 .watchqueue-playlist-actions-host {
@@ -1665,6 +1738,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 16px 0;
+  overflow: visible;
 }
 
 .watchqueue-queue-selector-minimal {
@@ -1694,8 +1768,10 @@
   display: flex;
   gap: 4px;
   overflow-x: auto;
+  overflow-y: visible;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  padding: 12px 0 4px;
 }
 
 .watchqueue-queue-radios::-webkit-scrollbar {
@@ -2014,6 +2090,102 @@
 
 .watchqueue-playlist-video-row .watchqueue-row-actions {
   gap: 4px;
+}
+
+
+/* ==========================================================================
+   Queue radio drag-and-drop reorder & merge
+   ========================================================================== */
+.watchqueue-queue-radio[draggable] {
+  cursor: grab;
+  position: relative;
+}
+
+.watchqueue-queue-radio[draggable]:active {
+  cursor: grabbing;
+}
+
+.watchqueue-queue-radio.watchqueue-dragging {
+  opacity: 0.45;
+}
+
+@keyframes wq-merge-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--wq-red, #ff0033) 50%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--wq-red, #ff0033) 25%, transparent); }
+}
+
+.watchqueue-queue-radio.watchqueue-merge-target {
+  border-color: var(--wq-red, #ff0033);
+  background: color-mix(in srgb, var(--wq-red, #ff0033) 22%, var(--wq-bg-soft));
+  transform: scale(1.08);
+  animation: wq-merge-pulse 0.9s ease-in-out infinite;
+  transition: transform 180ms ease, background 180ms ease;
+  z-index: 2;
+}
+
+.watchqueue-merge-badge {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--wq-red, #ff0033);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 3;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.watchqueue-queue-radio-drop-hint {
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--wq-muted);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+/* ==========================================================================
+   Settings — collapsible sub-sections
+   ========================================================================== */
+.watchqueue-autonext-details,
+.watchqueue-timestamps-details {
+  transition: opacity 160ms ease;
+}
+
+.watchqueue-autonext-details.watchqueue-hidden,
+.watchqueue-timestamps-details.watchqueue-hidden {
+  display: none !important;
+}
+
+/* ==========================================================================
+   History tab
+   ========================================================================== */
+.watchqueue-history-scroll {
+  display: flex;
+  flex-direction: column;
+}
+
+.watchqueue-history-list .watchqueue-row {
+  grid-template-columns: 52px 82px minmax(0, 1fr) auto;
+}
+
+.watchqueue-history-list .watchqueue-row-number {
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 

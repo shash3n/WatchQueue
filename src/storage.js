@@ -5,6 +5,7 @@ const WATCHQUEUE_DEFAULT_SETTINGS = {
   accent: "#ff0033",          // widget accent color
   resumeRewindSeconds: 7,     // rewind this many seconds before the saved timestamp
   minResumeSeconds: 15,       // only resume if the saved position is past this
+  autoNextEnabled: true,      // master toggle for auto-next behavior
   autoNextDelaySeconds: 10,   // wait before auto-playing the next queued video
   autoNextNearEnd: true,      // trigger auto-next when scrubbing near the end
   nearEndSeconds: 10,         // "near the end" window
@@ -16,6 +17,7 @@ const WATCHQUEUE_DEFAULT_SETTINGS = {
   widgetEdge: "right",        // "left" | "right" | "top" | "bottom" — which screen edge the widget docks to
   widgetStyle: "pill",        // "pill" | "tab" — floating widget shape
   panelOpacity: 100,          // 55..100 — panel background opacity (percent)
+  keepTimestamps: true,       // save watch progress timestamps
   progressRetentionDays: 90,  // prune saved timestamps older than this for videos not in any queue/playlist
   sleepCloseTab: false        // close tab when sleep timer ends (instead of just pausing)
 };
